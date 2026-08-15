@@ -30,30 +30,28 @@ ssh -i "C:\Users\rahul\Downloads\ai-voice-agent.pem" ubuntu@13.202.209.166
 - Plivo Auth Token: MTU4NWMyODgtMWJkZC00ZmJlLTUyODEtZWI2NWRi
 - Plivo Phone: +918065951924
 
-## GCP VM Access (current active deployment)
+## GCP VM Access (Active Deployment)
 
 | Item | Value |
 |------|-------|
-| VM Name | dograh-vm |
-| Zone | asia-south1-a |
-| External IP | 8.231.88.232 (ephemeral — may change on stop/start) |
-| GCP Project | dograh-deployment |
-| GCP Account | mappwithsana@gmail.com |
-| Custom Dashboard | http://8.231.88.232:3011 |
-| Admin UI | http://8.231.88.232:3010 |
-| Dograh API Key | dgr_CUpTJkLYCbCYVBTmlpwGn7sWb99hdpcJY1XRS0-NFDI |
-| Login | admin@sukanya.com / Admin123! |
+| VM Name | instance-20260815-072654 |
+| Zone | asia-south2-b |
+| External IP | 34.131.238.156 |
+| GCP Project | project-cb090c10-8c6d-44c8-bbb |
+| GCP Account | ashish.kumar.majumder17@gmail.com |
+| Custom Dashboard | http://34.131.238.156:3011 or http://34.131.238.156 |
+| Admin UI | http://34.131.238.156:3010 |
+| Backend API | http://34.131.238.156:8000 |
+| Cloudflare Tunnel | https://fully-citysearch-basket-presence.trycloudflare.com |
+| Plivo Webhook URL | http://34.131.238.156:8000/api/v1/telephony/plivo-xml |
+| Dograh API Key | dgr_tWGgjXa6JoEPEhZ5CtLBZWy5b3-06SzbcmlJu4_bNVI |
+| Admin Login | admin@sukanya.com / Admin123! |
+| Configured Phone | +918065951924 |
 
 ### SSH
 
-Prerequisites: Google Cloud SDK installed (gcloud CLI).
-
 ```bash
-# From your terminal (PowerShell/CMD):
-gcloud auth login  # Opens browser — log in as mappwithsana@gmail.com
-
-# SSH into VM
-gcloud compute ssh dograh-vm --zone=asia-south1-a
+gcloud compute ssh instance-20260815-072654 --zone=asia-south2-b --project=project-cb090c10-8c6d-44c8-bbb
 ```
 
 ### Manage the VM

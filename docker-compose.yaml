@@ -341,6 +341,7 @@ services:
   neutts-bridge:
     build: ./neutts-bridge
     container_name: neutts-bridge
+    profiles: ["neutts"]
     ports:
       - "127.0.0.1:8003:8003"
     environment:

@@ -1311,3 +1311,30 @@ def create_llm_service(
         usage_context=usage_context,
         **kwargs,
     )
+
+
+def create_llm_service_with_model_override(
+    user_config,
+    model_override: str | None,
+    correlation_id: str | None = None,
+    usage_context: str | None = None,
+):
+    """Create an LLM service with an optional model override."""
+    if model_override is None:
+        return create_llm_service(
+            user_config,
+            correlation_id=correlation_id,
+            usage_context=usage_context,
+        )
+
+    if user_config.llm is None:
+        raise ValueError("Cannot override the model without an LLM configuration")
+
+    llm_config = user_config.llm.model_copy(update={"model": model_override})
+    overridden_config = user_config.model_copy(update={"llm": llm_config})
+    return create_llm_service(
+        overridden_config,
+        correlation_id=correlation_id,
+        usage_context=usage_context,
+    )
+
