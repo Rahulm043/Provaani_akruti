@@ -46,7 +46,7 @@ ssh -i "C:\Users\rahul\Downloads\ai-voice-agent.pem" ubuntu@13.202.209.166
 | Plivo Webhook URL | http://34.131.238.156:8000/api/v1/telephony/plivo-xml |
 | Dograh API Key | dgr_tWGgjXa6JoEPEhZ5CtLBZWy5b3-06SzbcmlJu4_bNVI |
 | Admin Login | admin@sukanya.com / Admin123! |
-| Configured Phone | +918065951924 |
+| Configured Phone | +918031336640 |
 
 ### SSH
 
