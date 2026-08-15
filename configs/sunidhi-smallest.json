@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "mode": "byok",
+  "byok": {
+    "mode": "pipeline",
+    "pipeline": {
+      "stt": {
+        "provider": "smallest",
+        "api_key": ["REDACTED"],
+        "model": "pulse",
+        "language": "en"
+      },
+      "llm": {
+        "provider": "groq",
+        "api_key": ["REDACTED"],
+        "model": "openai/gpt-oss-20b"
+      },
+      "tts": {
+        "provider": "smallest",
+        "api_key": ["REDACTED"],
+        "model": "lightning_v3.1",
+        "voice": "sunidhi",
+        "language": "en"
+      }
+    }
+  }
+}

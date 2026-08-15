@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "mode": "byok",
+  "byok": {
+    "mode": "pipeline",
+    "pipeline": {
+      "stt": {
+        "provider": "smallest",
+        "api_key": ["REDACTED"],
+        "model": "pulse",
+        "language": "hi"
+      },
+      "llm": {
+        "provider": "openai",
+        "api_key": ["REDACTED"],
+        "model": "gemma-4-31b",
+        "base_url": "https://api.cerebras.ai/v1"
+      },
+      "tts": {
+        "provider": "smallest",
+        "api_key": ["REDACTED"],
+        "model": "lightning_v3.1",
+        "voice": "niharika",
+        "language": "bn",
+        "speed": 1.0
+      }
+    }
+  }
+}

@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Web Call - Sukanya Voice AI</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f13; color: #e4e4e7; min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; }
+.card { background: #18181b; border: 1px solid #27272a; border-radius: 16px;
+  padding: 2rem; max-width: 420px; width: 90%; text-align: center; }
+h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #f4f4f5; }
+.subtitle { color: #a1a1aa; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.btn {
+  width: 100%; padding: 1rem; border-radius: 50px; border: none; font-size: 1rem;
+  font-weight: 600; cursor: pointer; display: flex; align-items: center;
+  justify-content: center; gap: 0.5rem; transition: all 0.2s;
+}
+.btn.idle { background: #2563eb; color: white; }
+.btn.idle:hover { background: #1d4ed8; }
+.btn.connecting { background: #f59e0b; color: white; cursor: not-allowed; }
+.btn.connected { background: #22c55e; color: white; }
+.btn.disabled { background: #6b7280; color: #9ca3af; cursor: not-allowed; }
+.status { margin-top: 0.75rem; font-size: 0.85rem; color: #a1a1aa; min-height: 1.5em; }
+.status.error { color: #ef4444; }
+.agent-name { font-size: 1.1rem; color: #f4f4f5; margin-bottom: 1.5rem; font-weight: 500; }
+.agent-name span { color: #a78bfa; }
+.login-link { margin-top: 1rem; font-size: 0.8rem; color: #71717a; }
+.login-link a { color: #818cf8; }
+.form-group { margin-bottom: 1rem; }
+.form-group input:focus { outline: none; border-color: #2563eb; }
+</style>
+</head>
+<body>
+<div class="card" id="app">
+  <h1>Talk to Riya</h1>
+  <p class="subtitle">Sukanya Voice AI — Web Call</p>
+
+  <!-- Login form -->
+  <div id="loginForm" class="form-group">
+    <input type="email" id="emailInput" placeholder="Email" value="admin@provaani.xyz" style="width:100%;padding:0.6rem;margin-bottom:0.5rem;border-radius:8px;border:1px solid #27272a;background:#27272a;color:#e4e4e7;font-size:0.9rem;">
+    <input type="password" id="passInput" placeholder="Password" value="Admin123!" style="width:100%;padding:0.6rem;margin-bottom:0.5rem;border-radius:8px;border:1px solid #27272a;background:#27272a;color:#e4e4e7;font-size:0.9rem;">
+    <button class="btn idle" onclick="doLogin()" style="margin-bottom:0.5rem">Sign In</button>
+    <div id="loginMsg" style="font-size:0.8rem;color:#ef4444;min-height:1.2em"></div>
+  </div>
+
+  <!-- Call controls (hidden until logged in) -->
+  <div id="callControls" style="display:none">
+    <div class="agent-name">Agent: <span>Riya (Provani AI)</span></div>
+    <button class="btn idle" id="callBtn" onclick="startCall()">
+      <span id="btnIcon">📞</span> <span id="btnText">Start Web Call</span>
+    </button>
+    <button class="btn idle" id="hangupBtn" onclick="hangup()" style="display:none; margin-top:0.5rem; background:#dc2626">
+      🔴 Hang Up
+    </button>
+    <div class="status" id="status">Click to start a voice call with Riya</div>
+  </div>
+  <div class="login-link">
+    <a href="/login">← Back to Dashboard</a>
+  </div>
+</div>
+
+<script>
+const TUNNEL = window.location.protocol + '//' + window.location.host;
+const WORKFLOW_ID = 1;
+let ws = null, pc = null, runId = null, localStream = null;
+let wsConnected = false, pcClosed = false;
+let callActive = false;
+let pciId = null;
+
+function getToken() {
+  return localStorage.getItem('dograh_token');
+}
+
+async function doLogin() {
+  const e = document.getElementById('emailInput').value;
+  const p = document.getElementById('passInput').value;
+  const msg = document.getElementById('loginMsg');
+  msg.textContent = '';
+  try {
+    const r = await fetch(`/api/v1/auth/login`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email: e, password: p})
+    });
+    const d = await r.json();
+    if (r.ok && d.token) {
+      localStorage.setItem('dograh_token', d.token);
+      document.getElementById('loginForm').style.display = 'none';
+      document.getElementById('callControls').style.display = 'block';
+    } else {
+      msg.textContent = d.detail || 'Login failed';
+    }
+  } catch(er) { msg.textContent = 'Connection error: ' + er.message; }
+}
+
+function init() {
+  const t = getToken();
+  if (t) {
+    document.getElementById('loginForm').style.display = 'none';
+    document.getElementById('callControls').style.display = 'block';
+  }
+}
+window.addEventListener('DOMContentLoaded', init);
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = isError ? 'status error' : 'status';
+}
+
+function setButton(state) {
+  const btn = document.getElementById('callBtn');
+  const hangup = document.getElementById('hangupBtn');
+  const icon = document.getElementById('btnIcon');
+  const text = document.getElementById('btnText');
+  btn.className = 'btn ' + state;
+  switch(state) {
+    case 'idle':
+      icon.textContent = '📞'; text.textContent = 'Start Web Call';
+      btn.disabled = false; hangup.style.display = 'none'; break;
+    case 'connecting':
+      icon.textContent = '⏳'; text.textContent = 'Connecting...';
+      btn.disabled = true; hangup.style.display = 'none'; break;
+    case 'connected':
+      icon.textContent = '🎙️'; text.textContent = 'Riya is listening...';
+      btn.style.display = 'none'; hangup.style.display = 'block'; break;
+    case 'disabled':
+      btn.disabled = true; break;
+  }
+}
+
+async function createWorkflowRun() {
+  const token = getToken();
+  if (!token) { setStatus('Please login first', true); return null; }
+  setStatus('Creating session...');
+  const r = await fetch(`/api/v1/workflow/${WORKFLOW_ID}/runs`, {
+    method: 'POST',
+    headers: {'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+    body: JSON.stringify({name:'WebCall', mode:'smallwebrtc'})
+  });
+  const d = await r.json();
+  if (!r.ok) { setStatus('Failed to create session: ' + (d.detail||''), true); return null; }
+  return d;
+}
+
+async function startCall() {
+  if (callActive) return;
+  setButton('connecting');
+  setStatus('Creating call session...');
+  callActive = true;
+
+  try {
+    const run = await createWorkflowRun();
+    if (!run) { callActive = false; return; }
+    runId = run.id;
+    setStatus('Opening audio...');
+    await setupAudio();
+    setStatus('Connecting WebSocket...');
+
+    // Open WebSocket with auth in query (constructed dynamically based on host)
+    const wsProto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    ws = new WebSocket(`${wsProto}//${window.location.host}/api/v1/ws/signaling/${WORKFLOW_ID}/${runId}?token=${getToken()}`);
+
+    ws.onopen = () => {
+      wsConnected = true;
+      setStatus('WebSocket connected. Creating peer connection...');
+      setupPeerConnection();
+    };
+
+    ws.onmessage = async (evt) => {
+      const msg = JSON.parse(evt.data);
+      console.log('WS msg:', msg.type);
+
+      if (msg.type === 'answer') {
+        setStatus('Received answer. Setting remote description...');
+        await pc.setRemoteDescription({type: 'answer', sdp: msg.payload.sdp});
+        setButton('connected');
+        setStatus('Connected! Riya is listening...');
+      } else if (msg.type === 'ice-candidate') {
+        // Server-side ICE candidates are handled via addIceCandidate
+      } else if (msg.type === 'error') {
+        setStatus('Error: ' + msg.payload.message, true);
+        hangup();
+      } else if (msg.type === 'call-ended') {
+        setStatus('Call ended: ' + msg.payload.reason);
+        cleanup();
+      }
+    };
+
+    ws.onerror = (e) => { setStatus('WebSocket error', true); hangup(); };
+    ws.onclose = () => {
+      wsConnected = false;
+      if (callActive) { setStatus('WebSocket closed', true); hangup(); }
+    };
+  } catch(e) {
+    setStatus('Error: ' + e.message, true);
+    callActive = false;
+    setButton('idle');
+  }
+}
+
+async function setupAudio() {
+  try {
+    localStream = await navigator.mediaDevices.getUserMedia({audio: true, video: false});
+  } catch(e) {
+    setStatus('Microphone access denied. Please allow microphone.', true);
+    throw e;
+  }
+}
+
+function setupPeerConnection() {
+  pc = new RTCPeerConnection({
+    iceServers: [{urls: 'stun:stun.l.google.com:19302'}]
+  });
+
+  pcClosed = false;
+
+  // Add local audio track
+  if (localStream) {
+    localStream.getTracks().forEach(t => pc.addTrack(t, localStream));
+  }
+
+  // Handle remote audio
+  pc.ontrack = (e) => {
+    const audio = new Audio();
+    audio.srcObject = e.streams[0];
+    audio.play().catch(console.error);
+  };
+
+  // ICE candidate handler
+  pc.onicecandidate = (e) => {
+    if (!e.candidate || !ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({
+      type: 'ice-candidate',
+      payload: {
+        pc_id: pciId,
+        candidate: {
+          candidate: e.candidate.candidate,
+          sdpMid: e.candidate.sdpMid,
+          sdpMLineIndex: e.candidate.sdpMLineIndex
+        }
+      }
+    }));
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    if (pc.iceConnectionState === 'disconnected' || pc.iceConnectionState === 'failed') {
+      if (callActive) {
+        setStatus('Connection lost. Retry or hang up.', true);
+      }
+    }
+  };
+
+    // Generate pc_id once
+    pciId = `pc_${runId}_${Date.now()}`;
+
+    // Create and send offer
+    pc.createOffer({offerToReceiveAudio: true}).then(async (offer) => {
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({
+        type: 'offer',
+        payload: {
+          pc_id: pciId,
+          sdp: offer.sdp,
+          type: 'offer'
+        }
+      }));
+      setStatus('Offer sent. Waiting for answer...');
+    }).catch(e => {
+      setStatus('Failed to create offer: ' + e.message, true);
+    });
+}
+
+function cleanup() {
+  callActive = false;
+  if (ws) {
+    if (ws.readyState === WebSocket.OPEN) ws.close();
+    ws = null;
+  }
+  if (pc && !pcClosed) {
+    pcClosed = true;
+    pc.close();
+    pc = null;
+  }
+  if (localStream) {
+    localStream.getTracks().forEach(t => t.stop());
+    localStream = null;
+  }
+  document.getElementById('callBtn').style.display = 'block';
+  document.getElementById('hangupBtn').style.display = 'none';
+  document.getElementById('callBtn').className = 'btn idle';
+  document.getElementById('btnIcon').textContent = '📞';
+  document.getElementById('btnText').textContent = 'Start Web Call';
+  document.getElementById('callBtn').disabled = false;
+}
+
+function hangup() {
+  setStatus('Hanging up...');
+  cleanup();
+  setStatus('Click to start a voice call with Riya');
+}
+</script>
+</body>
+</html>

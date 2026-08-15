@@ -1,0 +1,29 @@
+# Environment
+.env
+
+# Node
+node_modules/
+dist/
+
+# Test artifacts
+*.wav
+
+# OS
+.DS_Store
+Thumbs.db
+nul
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Python caches
+__pycache__/
+.ruff_cache/
+
+# Build artifacts
+*.pyc
+__pycache__/
+.ruff_cache/
+.ruff_cache

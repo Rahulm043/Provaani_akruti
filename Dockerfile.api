@@ -1,0 +1,11 @@
+FROM dograhai/dograh-api:latest
+COPY patches/api/routes/campaign.py /app/api/routes/campaign.py
+COPY patches/api/services/pipecat/run_pipeline.py /app/api/services/pipecat/run_pipeline.py
+COPY patches/api/services/pipecat/service_factory.py /app/api/services/pipecat/service_factory.py
+COPY patches/api/services/configuration/registry.py /app/api/services/configuration/registry.py
+COPY patches/api/services/configuration/check_validity.py /app/api/services/configuration/check_validity.py
+USER root
+COPY cleanup_retention.py /app/cleanup_retention.py
+RUN pip install ormsgpack
+RUN pip install --no-deps pipecat-rumik
+USER dograh

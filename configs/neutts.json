@@ -1,0 +1,1 @@
+{"version":2,"mode":"byok","byok":{"mode":"pipeline","pipeline":{"stt":{"provider":"smallest","api_key":["REDACTED"],"model":"pulse","language":"en"},"llm":{"provider":"groq","api_key":["REDACTED"],"model":"openai/gpt-oss-20b"},"tts":{"provider":"openai","api_key":["REDACTED"],"model":"neutts-2e","voice":"alloy","base_url":"http://neutts-bridge:8003/v1"}}}}

@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "mode": "byok",
+  "byok": {
+    "mode": "pipeline",
+    "pipeline": {
+      "stt": {
+        "provider": "smallest",
+        "api_key": ["REDACTED"],
+        "model": "pulse",
+        "language": "en"
+      },
+      "llm": {
+        "provider": "openai",
+        "api_key": ["REDACTED"],
+        "model": "gpt-oss-120b",
+        "base_url": "https://api.cerebras.ai/v1"
+      },
+      "tts": {
+        "provider": "fish",
+        "api_key": ["REDACTED"],
+        "model": "s2.1-pro-free",
+        "voice": "933563129e564b19a115bedd57b7406a",
+        "language": "en",
+        "speed": 1.0
+      }
+    }
+  }
+}

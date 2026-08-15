@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Talk to Riya</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0f0f13; color: #e4e4e7; min-height: 100vh;
+  display: flex; flex-direction: column; align-items: center;
+}
+.container { max-width: 500px; width: 100%; padding: 2rem 1rem; flex: 1; display: flex; flex-direction: column; }
+h1 { text-align: center; font-size: 1.5rem; font-weight: 600; margin-bottom: 0.25rem; color: #f4f4f5; }
+.subtitle { text-align: center; color: #a1a1aa; font-size: 0.85rem; margin-bottom: 1.5rem; }
+.chat-box {
+  flex: 1; background: #18181b; border-radius: 12px; border: 1px solid #27272a;
+  padding: 1rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.75rem;
+  min-height: 400px; max-height: 500px;
+}
+.msg { padding: 0.6rem 1rem; border-radius: 12px; max-width: 85%; line-height: 1.5; font-size: 0.9rem; }
+.msg.user { background: #2563eb; color: white; align-self: flex-end; border-bottom-right-radius: 4px; }
+.msg.agent { background: #27272a; color: #e4e4e7; align-self: flex-start; border-bottom-left-radius: 4px; }
+.msg.thinking { opacity: 0.6; font-style: italic; align-self: flex-start; }
+.controls {
+  display: flex; gap: 0.75rem; margin-top: 1rem; align-items: center;
+}
+.talk-btn {
+  flex: 1; padding: 1rem; border-radius: 50px; border: none; font-size: 1rem; font-weight: 600;
+  cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 0.5rem;
+}
+.talk-btn.idle { background: #2563eb; color: white; }
+.talk-btn.idle:hover { background: #1d4ed8; }
+.talk-btn.listening { background: #dc2626; color: white; animation: pulse 1.5s infinite; }
+.talk-btn.processing { background: #6b7280; color: white; cursor: not-allowed; }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+.reset-btn {
+  padding: 1rem 1.2rem; border-radius: 50px; border: 1px solid #27272a;
+  background: transparent; color: #a1a1aa; cursor: pointer; font-size: 1rem;
+  transition: all 0.2s;
+}
+.reset-btn:hover { background: #27272a; color: #e4e4e7; }
+.status { text-align: center; font-size: 0.8rem; color: #71717a; margin-top: 0.5rem; min-height: 1.2em; }
+.login-form { background: #18181b; border-radius: 12px; border: 1px solid #27272a; padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem; }
+.login-form h2 { font-size: 1.1rem; color: #f4f4f5; text-align: center; }
+.login-form input { padding: 0.75rem; border-radius: 8px; border: 1px solid #27272a; background: #27272a; color: #e4e4e7; font-size: 0.9rem; }
+.login-form input:focus { outline: none; border-color: #2563eb; }
+.login-form button { padding: 0.75rem; border-radius: 8px; border: none; background: #2563eb; color: white; font-size: 0.95rem; font-weight: 600; cursor: pointer; }
+.login-form button:hover { background: #1d4ed8; }
+.login-error { color: #ef4444; font-size: 0.85rem; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container" id="app">
+  <h1>Talk to Riya</h1>
+  <p class="subtitle">Voice AI Agent — Provani AI</p>
+  <div id="login-section">
+    <div class="login-form">
+      <h2>Login</h2>
+      <input type="email" id="email" placeholder="Email" value="admin@sukanya.com">
+      <input type="password" id="password" placeholder="Password" value="Admin123!">
+      <button onclick="login()">Sign In</button>
+      <div id="login-error" class="login-error"></div>
+    </div>
+  </div>
+  <div id="chat-section" style="display:none;flex:1;display:none;flex-direction:column">
+    <div class="chat-box" id="chat-box"></div>
+    <div class="controls">
+      <button class="talk-btn idle" id="talk-btn" onclick="toggleListening()">🎤 Talk</button>
+      <button class="reset-btn" onclick="resetChat()" title="New conversation">↺</button>
+    </div>
+    <div class="status" id="status">Press Talk to speak with Riya</div>
+  </div>
+</div>
+<script>
+const API = '';
+let token = null;
+let runId = null;
+let workflowId = 1;
+let isListening = false;
+let recognition = null;
+
+// Load token from localStorage
+const saved = localStorage.getItem('dograh_token');
+if (saved) { token = saved; showChat(); }
+
+async function login() {
+  const email = document.getElementById('email').value;
+  const password = document.getElementById('password').value;
+  const errEl = document.getElementById('login-error');
+  try {
+    const r = await fetch(`${API}/api/v1/auth/login`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({email, password})
+    });
+    const d = await r.json();
+    if (!r.ok) { errEl.textContent = d.detail || 'Login failed'; return; }
+    token = d.token || d.access_token;
+    localStorage.setItem('dograh_token', token);
+    showChat();
+  } catch(e) { errEl.textContent = 'Connection error: ' + e.message; }
+}
+
+function showChat() {
+  document.getElementById('login-section').style.display = 'none';
+  document.getElementById('chat-section').style.display = 'flex';
+  startNewSession();
+}
+
+async function startNewSession() {
+  try {
+    const r = await fetch(`${API}/api/v1/workflow/${workflowId}/text-chat/sessions`, {
+      method: 'POST', headers: {'Content-Type':'application/json','Authorization':`Bearer ${token}`}
+    });
+    const d = await r.json();
+    runId = d.workflow_run_id;
+    // Show greeting
+    if (d.session_data?.turns?.length > 0) {
+      const last = d.session_data.turns[d.session_data.turns.length-1];
+      if (last.assistant_message?.text) {
+        addMsg('agent', last.assistant_message.text);
+      }
+    }
+    setStatus('Press Talk to speak with Riya');
+  } catch(e) { setStatus('Error starting session: ' + e.message); }
+}
+
+async function sendMessage(text) {
+  if (!runId) return;
+  addMsg('user', text);
+  try {
+    setStatus('Riya is thinking...');
+    const r = await fetch(`${API}/api/v1/workflow/${workflowId}/text-chat/sessions/${runId}/messages`, {
+      method: 'POST', headers: {'Content-Type':'application/json','Authorization':`Bearer ${token}`},
+      body: JSON.stringify({text: text})
+    });
+    const d = await r.json();
+    if (r.ok && d.session_data?.turns?.length > 0) {
+      const turns = d.session_data.turns;
+      const lastAgentTurn = [...turns].reverse().find(t => t.assistant_message?.text);
+      if (lastAgentTurn) {
+        const reply = lastAgentTurn.assistant_message.text;
+        addMsg('agent', reply);
+        speak(reply);
+      }
+    } else {
+      addMsg('agent', '(no response)');
+    }
+    setStatus('Press Talk to speak');
+  } catch(e) { setStatus('Error: ' + e.message); }
+}
+
+function toggleListening() {
+  if (isListening) { stopListening(); return; }
+  startListening();
+}
+
+function startListening() {
+  if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
+    setStatus('Speech recognition not supported in this browser. Try Chrome.');
+    return;
+  }
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!recognition) {
+    recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = true;
+    recognition.lang = 'bn-IN';
+  }
+  isListening = true;
+  const btn = document.getElementById('talk-btn');
+  btn.className = 'talk-btn listening';
+  btn.innerHTML = '🔴 Stop';
+  setStatus('Listening...');
+  let finalText = '';
+
+  recognition.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalText += ' ' + t;
+      else interim += t;
+    }
+    setStatus(interim || 'Listening...');
+  };
+  recognition.onerror = (e) => { setStatus('Error: ' + e.error); stopListening(); };
+  recognition.onend = () => {
+    if (isListening && finalText.trim()) {
+      const text = finalText.trim();
+      stopListening();
+      sendMessage(text);
+    } else if (isListening) {
+      stopListening();
+    }
+  };
+  recognition.start();
+}
+
+function stopListening() {
+  isListening = false;
+  if (recognition) { try { recognition.stop(); } catch(e) {} }
+  const btn = document.getElementById('talk-btn');
+  btn.className = 'talk-btn idle';
+  btn.innerHTML = '🎤 Talk';
+}
+
+let synth = window.speechSynthesis;
+function speak(text) {
+  if (!synth) return;
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.lang = 'bn-IN';
+  u.rate = 0.9;
+  u.pitch = 1.0;
+  u.volume = 1;
+  // Try to find a Bengali voice
+  const voices = synth.getVoices();
+  const bn = voices.find(v => v.lang.startsWith('bn'));
+  if (bn) u.voice = bn;
+  synth.speak(u);
+}
+
+function addMsg(role, text) {
+  const box = document.getElementById('chat-box');
+  const el = document.createElement('div');
+  el.className = 'msg ' + role;
+  el.textContent = text;
+  box.appendChild(el);
+  box.scrollTop = box.scrollHeight;
+}
+
+function setStatus(msg) {
+  document.getElementById('status').textContent = msg;
+}
+
+async function resetChat() {
+  runId = null;
+  document.getElementById('chat-box').innerHTML = '';
+  setStatus('Starting new session...');
+  if (synth) synth.cancel();
+  startNewSession();
+}
+</script>
+</body>
+</html>
