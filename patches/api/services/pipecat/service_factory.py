@@ -463,11 +463,17 @@ def create_stt_service(
             pipecat_language = Language(language_code)
         except ValueError:
             pipecat_language = language_code
+        keywords = (
+            getattr(user_config.stt, "keywords", None)
+            or getattr(user_config, "dictionary", None)
+            or ""
+        )
         return SmallestSTTService(
             api_key=user_config.stt.api_key,
             settings=SmallestSTTSettings(
                 model=user_config.stt.model,
                 language=pipecat_language,
+                keywords=keywords,
             ),
             sample_rate=audio_config.transport_in_sample_rate,
         )
