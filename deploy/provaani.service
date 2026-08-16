@@ -1,0 +1,16 @@
+[Unit]
+Description=Provaani Akruti Voice Agent Stack (Docker Compose)
+After=docker.service network-online.target
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/root/Provaani_akruti
+ExecStart=/usr/bin/docker compose --profile tunnel up -d
+ExecStop=/usr/bin/docker compose --profile tunnel down
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target
