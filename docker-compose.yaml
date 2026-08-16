@@ -30,7 +30,7 @@ services:
         max-size: "10m"
         max-file: "3"
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -45,7 +45,7 @@ services:
     image: redis:7
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     command: >
       --requirepass ${REDIS_PASSWORD:-redissecret}
     volumes:
@@ -86,6 +86,7 @@ services:
     profiles: ["remote", "local-turn"]
     environment:
       ENVIRONMENT: "${ENVIRONMENT:-local}"
+      ENABLE_SIGNUP: "${ENABLE_SIGNUP:-false}"
       SERVER_IP: "${SERVER_IP:-}"
       PUBLIC_HOST: "${PUBLIC_HOST:-}"
       PUBLIC_BASE_URL: "${PUBLIC_BASE_URL:-}"
@@ -152,6 +153,7 @@ services:
     environment:
       # Core application config
       ENVIRONMENT: "${ENVIRONMENT:-local}"
+      ENABLE_SIGNUP: "${ENABLE_SIGNUP:-false}"
       LOG_LEVEL: "INFO"
 
       # Public origin for this deployment. The API derives BACKEND_API_ENDPOINT,
@@ -308,6 +310,9 @@ services:
     ports:
       - "80:80"
       - "3011:80"
+      - "443:443"
+    volumes:
+      - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       api:
         condition: service_healthy
