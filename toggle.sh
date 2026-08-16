@@ -2,7 +2,7 @@
 # Toggle between Realtime (Gemini Live) and Cascaded (Smallest + Cerebras) pipelines
 # Usage: bash toggle.sh [realtime|cascaded]
 
-APIKEY='dgr_CUpTJkLYCbCYVBTmlpwGn7sWb99hdpcJY1XRS0-NFDI'
+APIKEY='REPLACED_DOGRAH_API_KEY'
 DOGRAH_API='http://localhost:8000'
 TARGET="${1:-status}"
 

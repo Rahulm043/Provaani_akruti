@@ -315,10 +315,10 @@ services:
       - "127.0.0.1:8001:8001"
     environment:
       DB_URL: postgresql://postgres:${POSTGRES_PASSWORD:-postgres}@postgres:5432/postgres
-      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-AQ.Ab8RN6JxorTVQu7wpQQBBtJGKtOm37Y8_tYxWM3x7dB_28AZcA}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-REPLACED_GCP_API_KEY}"
       MINIO_PUBLIC_ENDPOINT: "${MINIO_PUBLIC_ENDPOINT:-http://minio:9000}"
       DOGRAH_API_BASE: "http://api:8000"
-      DOGRAH_API_KEY: "dgr_CUpTJkLYCbCYVBTmlpwGn7sWb99hdpcJY1XRS0-NFDI"
+      DOGRAH_API_KEY: "REPLACED_DOGRAH_API_KEY"
       API_BASE_URL: "http://analysis-service:8001"
     depends_on:
       api:

@@ -2,12 +2,13 @@ import asyncio, json
 from api.db import db_client
 
 async def main():
-    for run_id in [36]:
+    for run_id in [49, 47]:
         rows = await db_client.execute_raw_query(f"SELECT id, mode, state, gathered_context, logs FROM workflow_runs WHERE id = {run_id};")
         if not rows:
             continue
         row = rows[0]
-        print(f"\n==================== RUN {run_id} ====================")
+        print(f"\n==================== RUN {run_id} (state: {row.get('state')}) ====================")
+        print("GATHERED CONTEXT:", json.dumps(row.get("gathered_context"), ensure_ascii=False, indent=2))
         logs = row.get("logs") or {}
         if isinstance(logs, str):
             logs = json.loads(logs)
@@ -20,6 +21,10 @@ async def main():
                 print(f"[Turn {turn}] BOT: {payload.get('text')}")
             elif ev_type == "rtf-user-transcription":
                 print(f"[Turn {turn}] USER: {payload.get('text')}")
+            elif ev_type == "rtf-ttfb-metric":
+                print(f"[Turn {turn}] TTFB: {payload.get('ttfb_seconds')}s (model: {payload.get('model')})")
+            elif ev_type == "rtf-tool-call":
+                print(f"[Turn {turn}] TOOL: {payload}")
 
 if __name__ == "__main__":
     asyncio.run(main())

@@ -1,1 +1,1 @@
-{"name":"Plivo","is_default_outbound":true,"config":{"provider":"plivo","auth_id":"MANDLJMGQZZGYTNWQ0MY","auth_token":"MTU4NWMyODgtMWJkZC00ZmJlLTUyODEtZWI2NWRi","application_id":"32113826222022344","from_numbers":[]}}
+{"name":"Plivo","is_default_outbound":true,"config":{"provider":"plivo","auth_id":"REPLACED_PLIVO_AUTH_ID","auth_token":"REPLACED_PLIVO_AUTH_TOKEN","application_id":"32113826222022344","from_numbers":[]}}
