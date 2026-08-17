@@ -116,6 +116,8 @@ Recognize and map speech recognition mishearings automatically:
                     "data": {
                         "name": "Akruti Receptionist",
                         "prompt": unified_prompt,
+                        "greeting_type": "text",
+                        "greeting": "नमस्ते! Welcome to Akruti Aesthetics & Plastic Surgery Clinic. ... Aap kis language me baat karna prefer karenge? ... Hindi, Bengali, ya English?",
                         "is_start": True,
                         "delayed_start": False,
                         "allow_interrupt": True,
