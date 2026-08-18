@@ -139,7 +139,7 @@
           "llm": {
             "model": "gpt-oss-120b",
             "api_key": [
-              "csk-wcpmyy58frvy386y8wjkxv39p2wmne6rkpv284hvfcwktnfj"
+              "<CEREBRAS_API_KEY>"
             ],
             "base_url": "https://api.cerebras.ai/v1",
             "provider": "openai"
@@ -147,7 +147,7 @@
           "stt": {
             "model": "pulse",
             "api_key": [
-              "sk_d341cbfa5e2ad090db0691e1482590d6"
+              "<SMALLEST_API_KEY>"
             ],
             "language": "north_indic",
             "provider": "smallest"
@@ -156,7 +156,7 @@
             "model": "lightning_v3.1_pro",
             "voice": "meher",
             "api_key": [
-              "sk_d341cbfa5e2ad090db0691e1482590d6"
+              "<SMALLEST_API_KEY>"
             ],
             "language": "auto",
             "provider": "smallest"

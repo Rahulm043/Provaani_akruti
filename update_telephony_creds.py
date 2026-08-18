@@ -10,11 +10,12 @@ async def main():
             text("UPDATE telephony_configurations SET is_default_outbound = false WHERE organization_id = 1;")
         )
 
-        # 2. Update telephony config 2 to Plivo MAN2EWNZFLNTATYZUXOS
+        # 2. Update telephony config 2 to Plivo
         creds = {
-            "auth_id": "MAN2EWNZFLNTATYZUXOS",
-            "auth_token": "MjcxOGM0ZGYtNmY1YS00YjI4LTU2ZDYtNWU2M2I2",
-            "application_id": "88306597238709575"
+            "auth_id": "MAMZKYNZHJMMMTODRLZI",
+            "subaccount_auth_id": "SANZA2YJC3YWITNGQ0ZC",
+            "auth_token": "MjU4ZWM0NzctNWU0Zi00ZjcxLWJhZDItMzEzZDhi",
+            "application_id": "51006597734508064"
         }
         await session.execute(
             text("""
@@ -31,8 +32,8 @@ async def main():
             text("""
                 UPDATE telephony_phone_numbers 
                 SET telephony_configuration_id = 2,
-                    address = '+918031336640',
-                    address_normalized = '+918031336640',
+                    address = '+918031825997',
+                    address_normalized = '+918031825997',
                     label = 'Akruti Aesthetics',
                     inbound_workflow_id = 1,
                     is_active = true,
@@ -41,11 +42,11 @@ async def main():
             """)
         )
 
-        # Add 918031336640 (without leading +)
+        # Add 918031825997 (without leading +)
         await session.execute(
             text("""
                 INSERT INTO telephony_phone_numbers (organization_id, telephony_configuration_id, address, address_normalized, address_type, inbound_workflow_id, is_active, is_default_caller_id, extra_metadata, created_at, updated_at)
-                VALUES (1, 2, '918031336640', '918031336640', 'pstn', 1, true, false, '{}', NOW(), NOW())
+                VALUES (1, 2, '918031825997', '918031825997', 'pstn', 1, true, false, '{}', NOW(), NOW())
                 ON CONFLICT (organization_id, address_normalized) DO UPDATE 
                 SET inbound_workflow_id = 1, is_active = true;
             """)

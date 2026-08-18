@@ -139,15 +139,29 @@ function CampaignRunRow({ run, workflowId }) {
     return () => { cancelled = true; };
   }, [run.id, isExpanded, workflowId]);
 
-  const openTranscript = () => {
+  const openTranscript = async () => {
     const token = fullRun.public_access_token;
+    const runId = fullRun.id || run.id;
     if (transcript !== null) { setIsTranscriptOpen(true); return; }
     if (analysis?.transcript) { setTranscript(analysis.transcript); setIsTranscriptOpen(true); return; }
-    if (!token) return;
+    if (!token && !runId) return;
     setTranscriptLoading(true);
-    fetch(`${API_BASE}/api/v1/public/download/workflow/${token}/transcript`)
-      .then(r => r.ok ? r.text() : '').then(t => { setTranscript(t || ''); setTranscriptLoading(false); setIsTranscriptOpen(true); })
-      .catch(() => { setTranscript(''); setTranscriptLoading(false); });
+    let text = '';
+    if (token) {
+      try {
+        const r = await fetch(`${API_BASE}/api/v1/public/download/workflow/${token}/transcript`);
+        if (r.ok) text = await r.text();
+      } catch { /* ignore */ }
+    }
+    if (!text && runId) {
+      try {
+        const r = await fetch(`${API_BASE}/voice-audio/transcripts/${runId}.txt`);
+        if (r.ok) text = await r.text();
+      } catch { /* ignore */ }
+    }
+    setTranscript(text || '');
+    setTranscriptLoading(false);
+    setIsTranscriptOpen(true);
   };
 
   const gc = fullRun.gathered_context || {};
@@ -173,7 +187,7 @@ function CampaignRunRow({ run, workflowId }) {
             <div className="flex flex-column gap-3 fade-in" style={{ padding: '0.25rem 0.5rem' }}>
               <div style={{ width: '100%' }}>
                 <div className="detail-section-title">Call Recording</div>
-                <RecordingPlayer publicToken={fullRun.public_access_token} defaultDuration={costInfo.call_duration_seconds} />
+                <RecordingPlayer publicToken={fullRun.public_access_token} runId={fullRun.id || run.id} defaultDuration={costInfo.call_duration_seconds} />
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                   <button className="minimal-transcript-btn" onClick={openTranscript} disabled={transcriptLoading}>
                     💬 {transcriptLoading ? 'Loading...' : analysis?.transcript ? 'Analysis Transcript' : 'Transcript'}

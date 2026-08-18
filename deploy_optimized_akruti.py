@@ -1,7 +1,11 @@
 import asyncio
 import json
+import os
 from api.db import db_client
 from sqlalchemy import text
+
+CEREBRAS_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+SMALLEST_KEY = os.environ.get("SMALLEST_API_KEY", "")
 
 async def main():
     async with db_client.async_session() as session:
@@ -25,14 +29,15 @@ async def main():
                             "provider": "openai",
                             "model": "gpt-oss-120b",
                             "base_url": "https://api.cerebras.ai/v1",
-                            "api_key": ["csk-wcpmyy58frvy386y8wjkxv39p2wmne6rkpv284hvfcwktnfj"],
+                            "api_key": [CEREBRAS_KEY],
                             "temperature": 0.1
                         },
                         "stt": {
                             "provider": "smallest",
                             "model": "pulse",
                             "language": "north_indic",
-                            "api_key": ["sk_d341cbfa5e2ad090db0691e1482590d6"]
+                            "api_key": [SMALLEST_KEY],
+                            "keywords": "blepharoplasty, rhinoplasty, dimpleplasty, buccal fat, gynaecomastia, liposuction, abdominoplasty, tummy tuck, cryolipolysis, micropigmentation, akruti, anand, durgapur, burdwan"
                         },
                         "tts": {
                             "provider": "smallest",
@@ -40,7 +45,7 @@ async def main():
                             "voice": "meher",
                             "language": "auto",
                             "speed": 0.9,
-                            "api_key": ["sk_d341cbfa5e2ad090db0691e1482590d6"]
+                            "api_key": [SMALLEST_KEY]
                         }
                     }
                 },

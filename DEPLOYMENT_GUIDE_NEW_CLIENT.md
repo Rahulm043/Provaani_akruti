@@ -203,7 +203,7 @@ python3 apply_language_lock_and_temp.py
 
 ---
 
-## ⚙️ 9. Automated Systemd Service & Nightly Maintenance
+## ⚙️ 9. Automated Systemd Service, Backups & Maintenance
 
 ### A. Auto-Start on Server Reboot (`provaani.service`)
 ```bash
@@ -229,9 +229,31 @@ sudo systemctl daemon-reload
 sudo systemctl enable provaani.service
 ```
 
-### B. Nightly Cleanup Cron Job (3:00 AM)
+### B. Production Logrotate Setup
 ```bash
-(crontab -l 2>/dev/null; echo "0 3 * * * cd /home/rahul/Provaani_akruti && /usr/bin/python3 cleanup_retention.py >> /var/log/provaani_cleanup.log 2>&1") | crontab -
+sudo cp deploy/provaani-logrotate.conf /etc/logrotate.d/provaani
+sudo chmod 644 /etc/logrotate.d/provaani
+```
+
+### C. 24/7 Automated Production Cron Jobs
+```bash
+chmod +x deploy/backup_db.sh deploy/renew_ssl.sh deploy/health_monitor.sh
+mkdir -p backups/postgres
+
+(crontab -l 2>/dev/null | grep -v 'warmup_daemon\|cleanup_retention\|backup_db\|renew_ssl\|health_monitor'; cat <<'CRON'
+# === Provaani Production Cron Jobs ===
+# 24/7 Provider & TLS Warmup Heartbeat (Every 10 minutes)
+*/10 * * * * sudo docker exec provaani_akruti-api-1 python3 /app/warmup_daemon.py >> /var/log/provaani_warmup.log 2>&1
+# Automated Health Watchdog & Self-Healing (Every 5 minutes)
+*/5 * * * * /home/rahul/Provaani_akruti/deploy/health_monitor.sh >> /var/log/provaani_monitor.log 2>&1
+# Nightly 3:00 AM Data Retention Cleanup
+0 3 * * * sudo docker exec provaani_akruti-api-1 python3 /app/cleanup_retention.py >> /var/log/provaani_cleanup.log 2>&1
+# Nightly 2:00 AM PostgreSQL Backup (7-day retention)
+0 2 * * * /home/rahul/Provaani_akruti/deploy/backup_db.sh >> /var/log/provaani_backup.log 2>&1
+# Weekly Monday 4:00 AM SSL Certificate Renewal
+0 4 * * 1 /home/rahul/Provaani_akruti/deploy/renew_ssl.sh >> /var/log/provaani_ssl_renew.log 2>&1
+CRON
+) | crontab -
 ```
 
 ---

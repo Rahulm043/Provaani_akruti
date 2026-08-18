@@ -15,8 +15,12 @@ const NAV_ITEMS = [
 function MobileTopHeader({ onLogout }) {
   return (
     <header className="mobile-top-navbar">
-      <div className="mobile-brand-wrap" style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
-        <img src="/logo.jpg" alt="Provaani Logo" style={{ width: '32px', height: '32px', borderRadius: '6px', objectFit: 'contain' }} />
+      <div className="mobile-brand-wrap">
+        <img
+          src="/logo.png"
+          alt="Provaani Logo"
+          className="mobile-brand-img"
+        />
         <div className="mobile-brand-text">
           <h1 className="mobile-brand-title">Provaani</h1>
           <span className="mobile-brand-sub">Voice AI Receptionist</span>
@@ -30,7 +34,7 @@ function MobileTopHeader({ onLogout }) {
           aria-label="Sign Out"
           type="button"
         >
-          <LogOut size={18} aria-hidden="true" />
+          <LogOut size={16} aria-hidden="true" />
         </button>
       </div>
     </header>
@@ -39,30 +43,56 @@ function MobileTopHeader({ onLogout }) {
 
 function Sidebar({ onLogout, isCollapsed, setIsCollapsed }) {
   return (
-    <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`}>
-      <button className="collapse-btn" onClick={() => setIsCollapsed(!isCollapsed)} aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"} type="button">
-        {isCollapsed ? <ChevronRight size={16} aria-hidden="true" /> : <ChevronLeft size={16} aria-hidden="true" />}
+    <aside className={`sidebar ${isCollapsed ? 'collapsed' : ''}`} aria-label="Main Navigation">
+      <button
+        className="collapse-btn"
+        onClick={() => setIsCollapsed(!isCollapsed)}
+        aria-label={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        type="button"
+      >
+        {isCollapsed ? <ChevronRight size={15} aria-hidden="true" /> : <ChevronLeft size={15} aria-hidden="true" />}
       </button>
+
       <div className="sidebar-brand">
-        <img src="/logo.jpg" alt="Provaani Logo" className="brand-icon" style={{ width: '40px', height: '40px', borderRadius: '8px', objectFit: 'contain' }} />
+        <img
+          src="/logo.png"
+          alt="Provaani Logo"
+          className="brand-icon"
+        />
         <div className="brand-text-container">
           <h2 className="brand-title">Provaani</h2>
           <span className="brand-sub">Voice AI Receptionist</span>
         </div>
       </div>
+
       <nav className="sidebar-nav">
         <div className="nav-main-links">
           {NAV_ITEMS.map(({ path, icon: Icon, label }) => (
-            <NavLink key={path} to={path} end={path === '/'} className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}>
-              <Icon size={18} aria-hidden="true" /><span>{label}</span>
+            <NavLink
+              key={path}
+              to={path}
+              end={path === '/'}
+              className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            >
+              <Icon size={18} aria-hidden="true" className="nav-icon" />
+              <span>{label}</span>
             </NavLink>
           ))}
         </div>
       </nav>
+
       <div className="sidebar-footer">
-        <div className="user-profile interactive logout-trigger" onClick={onLogout} title="Sign Out" role="button" tabIndex={0}>
-          <div className="logout-content"><LogOut size={18} aria-hidden="true" /><span>Logout</span></div>
-        </div>
+        <button
+          className="user-profile interactive logout-trigger"
+          onClick={onLogout}
+          title="Sign Out"
+          type="button"
+        >
+          <div className="logout-content">
+            <LogOut size={16} aria-hidden="true" />
+            <span>Logout</span>
+          </div>
+        </button>
       </div>
     </aside>
   );
@@ -74,9 +104,9 @@ function AppContent() {
 
   if (loading) {
     return (
-      <div className="flex-center" style={{ height: '100vh', flexDirection: 'column', gap: '1rem' }}>
+      <div className="app-loader-container">
         <div className="spinner-lg" />
-        <span style={{ color: 'var(--text-dim)' }}>Loading...</span>
+        <span className="app-loader-text">Loading Provaani...</span>
       </div>
     );
   }
@@ -107,3 +137,4 @@ export default function App() {
     </AuthProvider>
   );
 }
+

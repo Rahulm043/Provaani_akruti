@@ -3,16 +3,23 @@
 Provaani Production Warmup & Heartbeat Daemon
 Runs every 10 minutes to keep all external AI providers, TLS sessions,
 DNS caches, and database connection pools 100% warm 24/7/365.
+
+API keys are read from the container's environment (set via docker-compose
+or the workflow's model_configuration in the database). Do NOT hardcode
+keys here — they belong in .env or the Dograh org settings UI.
 """
 import asyncio
+import os
 import time
 import httpx
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-CEREBRAS_API_KEY = "csk-wcpmyy58frvy386y8wjkxv39p2wmne6rkpv284hvfcwktnfj"
-SMALLEST_API_KEY = "sk_d341cbfa5e2ad090db0691e1482590d6"
+# Read keys from environment — the API container injects these via docker-compose
+CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+SMALLEST_API_KEY = os.environ.get("SMALLEST_API_KEY", "")
+
 
 async def warm_internal_api(client: httpx.AsyncClient):
     try:

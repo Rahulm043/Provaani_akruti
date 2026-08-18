@@ -4,12 +4,12 @@ from sqlalchemy import text
 
 async def main():
     async with db_client.async_session() as session:
-        # Update phone number to +918031336640
+        # Update phone number to +918031825997
         await session.execute(
             text("""
                 UPDATE telephony_phone_numbers 
-                SET address = '+918031336640',
-                    address_normalized = '+918031336640',
+                SET address = '+918031825997',
+                    address_normalized = '+918031825997',
                     label = 'Akruti Aesthetics',
                     inbound_workflow_id = 1,
                     is_active = true,

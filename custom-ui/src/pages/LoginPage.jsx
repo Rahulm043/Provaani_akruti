@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../components/AuthProvider.jsx';
-import { LogIn } from 'lucide-react';
+import { LogIn, Loader2 } from 'lucide-react';
 
 export default function LoginPage() {
   const { login } = useAuth();
@@ -16,37 +16,74 @@ export default function LoginPage() {
     try {
       await login(email, password);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'Invalid email or password.');
     }
     setLoading(false);
   };
 
   return (
-    <div className="flex-center" style={{ height: '100vh', background: 'var(--bg)' }}>
-      <div className="card" style={{ width: '100%', maxWidth: 400, padding: '2rem' }}>
-        <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Voice AI</h1>
-          <p className="text-dim text-sm" style={{ marginTop: '0.5rem' }}>Sign in to your calling dashboard</p>
+    <div className="login-screen-wrapper">
+      <div className="card login-auth-card">
+        <div className="login-header-block">
+          <div className="login-brand-badge">
+            <img src="/logo.png" alt="Provaani Logo" className="login-brand-logo" />
+          </div>
+          <h1 className="login-brand-heading">Provaani</h1>
+          <p className="login-brand-subheading">Voice AI Receptionist Console</p>
         </div>
-        <form onSubmit={handleSubmit}>
+
+        <form onSubmit={handleSubmit} className="login-form">
           {error && (
-            <div className="card" style={{ background: 'var(--error-bg)', border: '1px solid rgba(239,68,68,0.2)', padding: '0.75rem 1rem', marginBottom: '1rem', color: 'var(--error)', fontSize: '0.875rem' }}>
+            <div className="login-error-banner" role="alert">
               {error}
             </div>
           )}
+
           <div className="form-group">
-            <label>Email</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="admin@sukanyaclasses.com" required />
+            <label htmlFor="login-email" className="form-label">Email address</label>
+            <input
+              id="login-email"
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="admin@provaani.xyz"
+              className="form-input-control"
+              required
+              autoComplete="email"
+            />
           </div>
-          <div className="form-group" style={{ marginTop: '1rem' }}>
-            <label>Password</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="Your password" required />
+
+          <div className="form-group" style={{ marginTop: '1.25rem' }}>
+            <label htmlFor="login-password" className="form-label">Password</label>
+            <input
+              id="login-password"
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="form-input-control"
+              required
+              autoComplete="current-password"
+            />
           </div>
-          <button className="btn-primary" type="submit" disabled={loading} style={{ width: '100%', marginTop: '1.5rem' }}>
-            {loading ? <div className="spinner-loader" style={{ width: 16, height: 16 }} /> : <><LogIn size={16} /> Sign In</>}
+
+          <button
+            className="btn-primary login-submit-btn"
+            type="submit"
+            disabled={loading}
+          >
+            {loading ? (
+              <Loader2 size={16} className="spinner-loader" aria-hidden="true" />
+            ) : (
+              <>
+                <LogIn size={16} aria-hidden="true" />
+                <span>Sign In to Console</span>
+              </>
+            )}
           </button>
         </form>
       </div>
     </div>
   );
 }
+

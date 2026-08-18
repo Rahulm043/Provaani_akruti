@@ -51,6 +51,20 @@ export const swrDefaults = {
 
 export { API_BASE };
 
+export function parseSafeDate(isoString) {
+  if (!isoString) return null;
+  if (isoString instanceof Date) return isNaN(isoString.getTime()) ? null : isoString;
+  let str = String(isoString).trim();
+  if (str.includes(' ') && !str.includes('T')) {
+    str = str.replace(' ', 'T');
+  }
+  if (str.endsWith('+00')) {
+    str = str + ':00';
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 export function formatDuration(seconds) {
   if (!seconds || seconds <= 0) return '—';
   const m = Math.floor(seconds / 60);

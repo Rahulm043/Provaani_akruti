@@ -69,7 +69,7 @@ async def send_whatsapp_clinic_details(
         "📍 *Burdwan Clinic*:\n"
         "S. S. Doctor Centre, Power House Para, Near Park Nursing Home, Burdwan\n\n"
         "📞 *Contact Phone Numbers*:\n"
-        "+91 90020 08137 / +91 90020 08147 / +91 8031336640\n\n"
+        "+91 90020 08137 / +91 90020 08147 / +91 8031825997\n\n"
         "✉️ *Email*: akrutiaestheticsurgery@gmail.com\n"
         "🕒 *Clinic Hours*: Monday – Friday, 9:00 AM – 7:00 PM\n"
         f"{extra_section}\n"

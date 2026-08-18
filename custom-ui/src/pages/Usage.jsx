@@ -1,24 +1,30 @@
 import React, { useState, useMemo } from 'react';
 import useSWR from 'swr';
 import { Phone, Clock, BarChart3, RefreshCw, ChevronDown, ChevronRight, Sparkles, CreditCard } from 'lucide-react';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip } from 'recharts';
+import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
 
 import {
   swrFetcher, swrDefaults, formatDuration, formatDate,
-  API_BASE, fetchAnalysis, SENTIMENT_CONFIG
+  API_BASE, fetchAnalysis, SENTIMENT_CONFIG, parseSafeDate, authFetch
 } from '../utils/api.js';
 import { StatGridSkeleton } from '../components/Skeleton.jsx';
 
 // Plan Settings
 const LIMIT_MINUTES = 1000;
 const OVERAGE_RATE = 3.0; // Rs. 3 per minute
-const BILLING_START_DATE_STR = import.meta.env.VITE_BILLING_START_DATE || '2026-06-05';
+const BILLING_START_DATE_STR = import.meta.env.VITE_BILLING_START_DATE || import.meta.env.VITE_START_DATE || '2026-08-18';
 
 // Helpers
 function getISTDate(isoString) {
-  const d = isoString ? new Date(isoString) : new Date();
+  const d = isoString ? parseSafeDate(isoString) : new Date();
+  if (!d) return new Date();
   const utc = d.getTime() + d.getTimezoneOffset() * 60000;
   return new Date(utc + 330 * 60000);
+}
+
+function getRunDuration(run) {
+  if (!run) return 0;
+  return run.cost_info?.call_duration_seconds || run.usage_info?.call_duration_seconds || run.duration || 0;
 }
 
 function formatTalkTime(seconds) {
@@ -35,14 +41,15 @@ function formatTalkTime(seconds) {
 
 // Generate periods of 30 days starting from startStr
 function getBillingPeriods(startStr) {
-  const start = new Date(startStr);
+  const start = parseSafeDate(`${startStr}T00:00:00+05:30`) || new Date(startStr);
   const now = new Date();
   const periods = [];
   let currentStart = new Date(start);
 
   while (currentStart <= now) {
     const periodEnd = new Date(currentStart);
-    periodEnd.setDate(periodEnd.getDate() + 29); // 30 days inclusive
+    periodEnd.setDate(periodEnd.getDate() + 29);
+    periodEnd.setHours(23, 59, 59, 999);
 
     const isCurrent = now >= currentStart && now <= periodEnd;
     periods.push({
@@ -52,56 +59,41 @@ function getBillingPeriods(startStr) {
       label: `${currentStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })} - ${periodEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`
     });
 
-    // Next period
     currentStart = new Date(periodEnd);
-    currentStart.setDate(currentStart.getDate() + 1);
+    currentStart.setMilliseconds(currentStart.getMilliseconds() + 1);
   }
 
   periods.reverse();
   return periods;
 }
 
-// Mock completed periods data
-const MOCK_PERIODS_DATA = {
-  0: { // Earliest period: Jun 5 - Jul 4
-    callsCount: 154,
-    totalTalkSec: 46200, // ~770 mins
-    totalMinutes: 810,
-    baseMins: 810,
-    extraMins: 0,
-    overageCost: 0
-  },
-  1: { // Period 2: Jul 5 - Aug 3
-    callsCount: 286,
-    totalTalkSec: 62500, // ~1041 mins
-    totalMinutes: 1085,
-    baseMins: 1000,
-    extraMins: 85,
-    overageCost: 85 * OVERAGE_RATE
-  }
-};
+// Mock completed periods data (reset for client start date)
+const MOCK_PERIODS_DATA = {};
 
 export default function Usage() {
   const [expandedIndex, setExpandedIndex] = useState(null);
+  const [selectedPeriodIdx, setSelectedPeriodIdx] = useState(0);
+  const [rangeMode, setRangeMode] = useState('1Month'); // '7Days' | '1Month' | 'Lifetime'
   
   // Calculate periods
   const periods = useMemo(() => getBillingPeriods(BILLING_START_DATE_STR), []);
-  const currentPeriod = periods.find(p => p.isCurrent) || periods[0];
+  const currentSelectedPeriod = periods[selectedPeriodIdx] || periods[0];
 
   // Fetch workflows to retrieve runs
   const { data: workflows } = useSWR('/api/v1/workflow/fetch', swrFetcher, { dedupingInterval: 60000 });
   const wfIds = (workflows || []).map(w => w.id);
 
-  // Fetch runs for all active workflows
+  // Fetch runs for all active workflows using authFetch
   const combinedFetcher = async () => {
     if (!wfIds.length) return [];
     const results = await Promise.all(wfIds.map(wid =>
-      fetch(`/api/v1/workflow/${wid}/runs?limit=250`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem('dograh_token')}` },
-      }).then(r => r.json()).then(d => (d.runs || []).map(r => ({ ...r, _wfId: wid }))).catch(() => [])
+      authFetch(`/api/v1/workflow/${wid}/runs?limit=100`)
+        .then(r => (r.ok ? r.json() : { runs: [] }))
+        .then(d => (d.runs || []).map(r => ({ ...r, _wfId: wid })))
+        .catch(() => [])
     ));
     const flat = results.flat();
-    flat.sort((a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0));
+    flat.sort((a, b) => (parseSafeDate(b.created_at)?.getTime() || 0) - (parseSafeDate(a.created_at)?.getTime() || 0));
     return flat;
   };
 
@@ -111,21 +103,25 @@ export default function Usage() {
     { ...swrDefaults, refreshInterval: 10000 }
   );
 
-  // Filter current active period runs
+  // Filter runs for the selected billing period
   const activeRuns = useMemo(() => {
+    const startDateCutoff = parseSafeDate(`${BILLING_START_DATE_STR}T00:00:00+05:30`);
     return allRuns.filter(r => {
-      const d = new Date(r.created_at);
-      return r.name !== 'WebCall' && d >= currentPeriod.start && d <= currentPeriod.end;
+      if (r.name === 'WebCall') return false;
+      const d = parseSafeDate(r.created_at);
+      if (!d) return false;
+      if (startDateCutoff && d < startDateCutoff) return false;
+      return d >= currentSelectedPeriod.start && d <= currentSelectedPeriod.end;
     });
-  }, [allRuns, currentPeriod]);
+  }, [allRuns, currentSelectedPeriod]);
 
-  // Aggregate current stats
+  // Aggregate selected stats
   const currentStats = useMemo(() => {
     const count = activeRuns.length;
-    const totalTalkSec = activeRuns.reduce((sum, r) => sum + (r.cost_info?.call_duration_seconds || 0), 0);
+    const totalTalkSec = activeRuns.reduce((sum, r) => sum + getRunDuration(r), 0);
     const avgTalkSec = count > 0 ? totalTalkSec / count : 0;
     const totalRoundedMinutes = activeRuns.reduce((sum, r) => {
-      const seconds = r.cost_info?.call_duration_seconds || 0;
+      const seconds = getRunDuration(r);
       const rounded = seconds > 0 ? Math.ceil(seconds / 60) : 0;
       return sum + rounded;
     }, 0);
@@ -146,37 +142,63 @@ export default function Usage() {
     };
   }, [activeRuns]);
 
-  // Generate chart data: group activeRuns by date (last 30 days)
+  // Generate chart data based on rangeMode: '7Days' | '1Month' | 'Lifetime'
   const chartData = useMemo(() => {
     const dataMap = new Map();
-    
-    // Initialize last 30 days
     const now = new Date();
-    for (let i = 29; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
-      const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
-      dataMap.set(key, 0);
+
+    if (rangeMode === '7Days') {
+      // Past 7 days
+      for (let i = 6; i >= 0; i--) {
+        const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() - i);
+        const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        dataMap.set(key, 0);
+      }
+    } else if (rangeMode === 'Lifetime') {
+      // Every day from BILLING_START_DATE_STR up to today
+      const start = parseSafeDate(`${BILLING_START_DATE_STR}T00:00:00+05:30`) || new Date();
+      const diffTime = Math.max(0, now.getTime() - start.getTime());
+      const totalDays = Math.max(1, Math.ceil(diffTime / (1000 * 60 * 60 * 24)));
+      
+      for (let i = 0; i < totalDays; i++) {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i);
+        const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        dataMap.set(key, 0);
+      }
+    } else {
+      // '1Month' default: 30 days of the selected billing period
+      const start = new Date(currentSelectedPeriod.start);
+      for (let i = 0; i < 30; i++) {
+        const d = new Date(start);
+        d.setDate(d.getDate() + i);
+        const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        dataMap.set(key, 0);
+      }
     }
 
-    // Populate actual data
-    activeRuns.forEach(r => {
-      const d = new Date(r.created_at);
+    // Populate actual run data
+    const targetRuns = rangeMode === 'Lifetime' 
+      ? allRuns.filter(r => r.name !== 'WebCall' && parseSafeDate(r.created_at) >= (parseSafeDate(`${BILLING_START_DATE_STR}T00:00:00+05:30`) || new Date(0)))
+      : activeRuns;
+
+    targetRuns.forEach(r => {
+      const d = parseSafeDate(r.created_at);
+      if (!d) return;
       const key = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
       if (dataMap.has(key)) {
-        const seconds = r.cost_info?.call_duration_seconds || 0;
+        const seconds = getRunDuration(r);
         const rounded = seconds > 0 ? Math.ceil(seconds / 60) : 0;
         dataMap.set(key, dataMap.get(key) + rounded);
       }
     });
 
     return Array.from(dataMap.entries()).map(([date, minutes]) => ({ date, minutes }));
-  }, [activeRuns]);
+  }, [rangeMode, activeRuns, allRuns, currentSelectedPeriod]);
 
   // Merge database states with mock history periods
   const resolvedPeriods = useMemo(() => {
     return periods.map((p, idx) => {
-      // Index mapping for mock data (Period 0 is earliest, Period 1 is next, etc.)
-      // Since periods is reversed, latest is idx 0
       const mockIdx = periods.length - 1 - idx;
       const mockData = MOCK_PERIODS_DATA[mockIdx];
 
@@ -209,48 +231,64 @@ export default function Usage() {
   return (
     <div className="fade-in">
       {/* Header */}
-      <div className="page-header mb-3">
-        <div className="flex align-items-center gap-2" style={{ marginBottom: '0.25rem' }}>
-          <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700 }}>Usage & Billing</h1>
-          <button
-            className="btn-secondary"
-            onClick={() => mutate()}
-            title="Refresh statistics"
-            aria-label="Refresh statistics"
-            type="button"
-            style={{ padding: '0.35rem 0.5rem', height: 32, display: 'inline-flex', alignItems: 'center' }}
-          >
-            <RefreshCw size={15} aria-hidden="true" />
-          </button>
+      <div className="page-header mb-4" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+        <div>
+          <div className="flex align-items-center gap-2" style={{ marginBottom: '0.35rem' }}>
+            <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Usage & Billing</h1>
+            <button
+              className="btn-icon-refresh"
+              onClick={() => mutate()}
+              title="Refresh statistics"
+              aria-label="Refresh statistics"
+              type="button"
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+            </button>
+          </div>
+          <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-dim)' }}>
+            Quota tracking and monthly usage dashboard · Cycle: <span style={{ color: 'var(--accent-indigo, #818cf8)', fontWeight: 600 }}>{currentSelectedPeriod.label}</span>
+          </p>
         </div>
-        <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-dim)' }}>
-          Quota tracking and monthly usage dashboard · Current billing cycle: {currentPeriod.label}
-        </p>
+
+        {/* Billing Cycle Selector Dropdown */}
+        <div className="cycle-selector-group">
+          <label htmlFor="billing-cycle-select" className="cycle-select-label">Select Cycle:</label>
+          <select
+            id="billing-cycle-select"
+            value={selectedPeriodIdx}
+            onChange={(e) => setSelectedPeriodIdx(Number(e.target.value))}
+            className="cycle-select-control"
+            aria-label="Select Billing Cycle"
+          >
+            {periods.map((p, idx) => (
+              <option key={idx} value={idx}>
+                {p.label} {p.isCurrent ? '(Active)' : ''}
+              </option>
+            ))}
+          </select>
+        </div>
       </div>
 
-      {/* Bold Featured Quota Card */}
-      <div className="card mb-4" style={{ padding: '1.75rem', background: 'rgba(24, 24, 27, 0.65)', border: '1px solid rgba(39, 39, 42, 0.8)' }}>
-        <h2 style={{ fontSize: '1.1rem', fontWeight: 700, marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <CreditCard size={18} style={{ color: 'var(--accent-indigo, #818cf8)' }} />
+      {/* Featured Quota Card */}
+      <div className="card mb-4 quota-featured-card">
+        <h2 className="quota-card-title">
+          <CreditCard size={18} style={{ color: 'var(--accent-indigo, #818cf8)' }} aria-hidden="true" />
           <span>Active Quota Status</span>
         </h2>
         
         {/* Bar 1: Base Usage */}
         <div style={{ marginBottom: '1.5rem' }}>
           <div className="flex-between mb-1" style={{ fontSize: '0.85rem' }}>
-            <span style={{ fontWeight: 600 }}>Plan Included Minutes</span>
-            <span style={{ color: 'var(--text-dim)' }} className="mono">
+            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Plan Included Minutes</span>
+            <span style={{ color: 'var(--text-secondary)' }} className="mono tabular-nums">
               {currentStats.baseMins} / {LIMIT_MINUTES} min
             </span>
           </div>
-          <div style={{ width: '100%', height: '10px', background: '#27272a', borderRadius: '5px', overflow: 'hidden' }}>
+          <div className="quota-track-bg">
             <div 
+              className="quota-bar-fill base"
               style={{ 
-                width: `${basePercent}%`, 
-                height: '100%', 
-                background: 'linear-gradient(90deg, #6366f1 0%, #10b981 100%)', 
-                borderRadius: '5px',
-                transition: 'width 0.5s ease-out'
+                width: `${basePercent}%`
               }} 
             />
           </div>
@@ -259,25 +297,22 @@ export default function Usage() {
         {/* Bar 2: Extra Usage */}
         <div>
           <div className="flex-between mb-1" style={{ fontSize: '0.85rem' }}>
-            <span style={{ fontWeight: 600 }}>Overage Usage</span>
-            <span style={{ color: 'var(--text-dim)' }} className="mono">
+            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Overage Usage</span>
+            <span style={{ color: 'var(--text-secondary)' }} className="mono tabular-nums">
               {currentStats.extraMins} mins
             </span>
           </div>
-          <div style={{ width: '100%', height: '10px', background: '#27272a', borderRadius: '5px', overflow: 'hidden', marginBottom: '0.75rem' }}>
+          <div className="quota-track-bg" style={{ marginBottom: '0.75rem' }}>
             <div 
+              className="quota-bar-fill overage"
               style={{ 
-                width: `${currentStats.extraMins > 0 ? Math.max(5, extraPercent) : 0}%`, 
-                height: '100%', 
-                background: 'linear-gradient(90deg, #f59e0b 0%, #ef4444 100%)', 
-                borderRadius: '5px',
-                transition: 'width 0.5s ease-out'
+                width: `${currentStats.extraMins > 0 ? Math.max(5, extraPercent) : 0}%`
               }} 
             />
           </div>
           {currentStats.extraMins > 0 && (
-            <div style={{ fontSize: '0.8rem', color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '0.35rem', fontWeight: 600 }}>
-              <Sparkles size={14} />
+            <div className="overage-alert-pill">
+              <Sparkles size={14} aria-hidden="true" />
               <span>Estimated Overage Charges: Rs. {currentStats.overageCost.toFixed(2)} (at Rs. {OVERAGE_RATE}/min)</span>
             </div>
           )}
@@ -288,28 +323,28 @@ export default function Usage() {
       {isLoading ? <StatGridSkeleton count={4} /> : (
         <div className="stats-grid mobile-3-across mb-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))' }}>
           <div className="stat-card">
-            <div className="stat-icon blue"><Phone size={20} aria-hidden="true" /></div>
+            <div className="stat-icon blue"><Phone size={18} aria-hidden="true" /></div>
             <div>
               <div className="stat-value">{currentStats.callsCount}</div>
               <div className="stat-label">Total Calls</div>
             </div>
           </div>
           <div className="stat-card">
-            <div className="stat-icon green"><Clock size={20} aria-hidden="true" /></div>
+            <div className="stat-icon green"><Clock size={18} aria-hidden="true" /></div>
             <div>
               <div className="stat-value">{currentStats.totalTalkFormatted}</div>
               <div className="stat-label">Total Talk Time</div>
             </div>
           </div>
           <div className="stat-card">
-            <div className="stat-icon green"><BarChart3 size={20} aria-hidden="true" /></div>
+            <div className="stat-icon green"><BarChart3 size={18} aria-hidden="true" /></div>
             <div>
               <div className="stat-value">{currentStats.avgTalkFormatted}</div>
               <div className="stat-label">Avg / Call</div>
             </div>
           </div>
           <div className="stat-card">
-            <div className="stat-icon blue"><Sparkles size={20} aria-hidden="true" style={{ color: 'var(--accent-indigo, #818cf8)' }} /></div>
+            <div className="stat-icon indigo"><Sparkles size={18} aria-hidden="true" /></div>
             <div>
               <div className="stat-value">{currentStats.totalMinutes} m</div>
               <div className="stat-label">Talk Minutes</div>
@@ -319,22 +354,81 @@ export default function Usage() {
       )}
 
       {/* Trajectory Bar Chart */}
-      <div className="card mb-4" style={{ padding: '1.5rem 1rem 1rem 1rem' }}>
-        <h3 className="section-title" style={{ paddingLeft: '0.5rem', marginBottom: '1.25rem' }}>Usage Trajectory</h3>
-        <div style={{ width: '100%', height: 260 }}>
-          <ResponsiveContainer width="100%" height="100%">
-            <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-              <XAxis dataKey="date" stroke="#71717a" fontSize={10} tickLine={false} axisLine={false} />
-              <YAxis stroke="#71717a" fontSize={10} tickLine={false} axisLine={false} />
-              <Tooltip 
-                contentStyle={{ background: '#18181b', border: '1px solid #27272a', borderRadius: '8px' }}
-                labelStyle={{ fontSize: 11, fontWeight: 700, color: '#f4f4f5' }}
-                itemStyle={{ fontSize: 11, color: '#a78bfa' }}
-                formatter={(value) => [`${value} minutes`, 'Usage']}
-              />
-              <Bar dataKey="minutes" fill="#818cf8" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+      <div className="card mb-4 chart-card-container">
+        <div className="chart-header-row">
+          <h3 className="section-title" style={{ margin: 0 }}>Usage Trajectory</h3>
+
+          {/* Segmented Range Control: 7 Days | 1 Month | Lifetime */}
+          <div className="range-picker mobile-scroll" role="tablist" aria-label="Chart date range filter">
+            <button
+              role="tab"
+              aria-selected={rangeMode === '7Days'}
+              type="button"
+              onClick={() => setRangeMode('7Days')}
+              className={`range-btn ${rangeMode === '7Days' ? 'active' : ''}`}
+            >
+              7 Days
+            </button>
+            <button
+              role="tab"
+              aria-selected={rangeMode === '1Month'}
+              type="button"
+              onClick={() => setRangeMode('1Month')}
+              className={`range-btn ${rangeMode === '1Month' ? 'active' : ''}`}
+            >
+              1 Month
+            </button>
+            <button
+              role="tab"
+              aria-selected={rangeMode === 'Lifetime'}
+              type="button"
+              onClick={() => setRangeMode('Lifetime')}
+              className={`range-btn ${rangeMode === 'Lifetime' ? 'active' : ''}`}
+            >
+              Lifetime
+            </button>
+          </div>
+        </div>
+
+        {/* Scrollable Horizontal Container */}
+        <div className="chart-scroll-wrap">
+          <div style={{ width: '100%', minWidth: rangeMode === 'Lifetime' ? `${Math.max(100, chartData.length * 36)}px` : '100%', height: 260 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="usageBarGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="#818cf8" stopOpacity={1} />
+                    <stop offset="100%" stopColor="#6366f1" stopOpacity={0.75} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="date" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} />
+                <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} allowDecimals={false} />
+                <Tooltip 
+                  cursor={{ fill: 'rgba(255, 255, 255, 0.03)' }}
+                  contentStyle={{
+                    background: '#11141d',
+                    border: '1px solid #232733',
+                    borderRadius: '8px',
+                    boxShadow: '0 8px 24px rgba(0, 0, 0, 0.6)',
+                    padding: '8px 12px'
+                  }}
+                  labelStyle={{ fontSize: 11, fontWeight: 700, color: '#f8fafc', marginBottom: 2 }}
+                  itemStyle={{ fontSize: 11, color: '#818cf8', fontWeight: 600 }}
+                  formatter={(value) => [`${value} minutes`, 'Usage']}
+                />
+                <Bar dataKey="minutes" radius={[6, 6, 0, 0]} maxBarSize={48}>
+                  {chartData.map((entry, index) => (
+                    <Cell 
+                      key={`cell-${index}`} 
+                      fill={entry.minutes > 0 ? 'url(#usageBarGradient)' : 'rgba(35, 39, 51, 0.4)'}
+                      stroke={entry.minutes > 0 ? '#a5b4fc' : 'transparent'}
+                      strokeWidth={entry.minutes > 0 ? 1 : 0}
+                    />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </div>
 
@@ -348,25 +442,34 @@ export default function Usage() {
             const exPercent = period.extraMins > 0 ? Math.min(100, (period.extraMins / LIMIT_MINUTES) * 100) : 0;
 
             return (
-              <div key={idx} style={{ background: '#121215', border: '1px solid #27272a', borderRadius: '10px', overflow: 'hidden' }}>
+              <div 
+                key={idx} 
+                className={`cycle-history-card ${selectedPeriodIdx === idx ? 'selected' : ''}`}
+              >
                 {/* Header Row */}
                 <div 
-                  onClick={() => toggleExpand(idx)}
-                  style={{ 
-                    padding: '1rem', 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center', 
-                    cursor: 'pointer',
-                    userSelect: 'none'
+                  onClick={() => {
+                    setSelectedPeriodIdx(idx);
+                    toggleExpand(idx);
                   }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedPeriodIdx(idx);
+                      toggleExpand(idx);
+                    }
+                  }}
+                  tabIndex={0}
+                  role="button"
+                  aria-expanded={isExpanded}
+                  className="cycle-history-header"
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                     <div style={{ transform: isExpanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.2s', opacity: 0.7 }}>
-                      <ChevronRight size={16} />
+                      <ChevronRight size={16} aria-hidden="true" />
                     </div>
                     <div>
-                      <div style={{ fontWeight: 600, fontSize: '0.9rem' }}>{period.label}</div>
+                      <div style={{ fontWeight: 600, fontSize: '0.9rem', color: 'var(--text)' }}>{period.label}</div>
                       <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
                         {period.isCurrent ? 'Current Active Period' : 'Completed / Locked Period'}
                       </div>
@@ -376,21 +479,21 @@ export default function Usage() {
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: period.overageCost > 0 ? '#f59e0b' : 'inherit' }}>
                       {period.overageCost > 0 ? `Rs. ${period.overageCost.toFixed(2)}` : 'Rs. 0.00'}
                     </div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>Overage Cost</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Overage Cost</div>
                   </div>
                 </div>
 
                 {/* Expanded Details */}
                 {isExpanded && (
-                  <div style={{ padding: '1rem', background: '#0b0b0d', borderTop: '1px solid #1f1f23', fontSize: '0.85rem' }}>
+                  <div className="cycle-history-detail">
                     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '1rem', marginBottom: '1.25rem' }}>
                       <div>
                         <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Total Calls</div>
-                        <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem' }}>{period.callsCount}</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem', color: 'var(--text)' }}>{period.callsCount}</div>
                       </div>
                       <div>
                         <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Talk Minutes</div>
-                        <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem' }}>{period.totalMinutes} min</div>
+                        <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem', color: 'var(--text)' }}>{period.totalMinutes} min</div>
                       </div>
                       <div>
                         <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Overage Minutes</div>
@@ -404,9 +507,9 @@ export default function Usage() {
                     <div style={{ marginBottom: '1rem' }}>
                       <div className="flex-between mb-1" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
                         <span>Plan Included Minutes</span>
-                        <span className="mono">{period.baseMins} / {LIMIT_MINUTES} min</span>
+                        <span className="mono tabular-nums">{period.baseMins} / {LIMIT_MINUTES} min</span>
                       </div>
-                      <div style={{ width: '100%', height: '6px', background: '#27272a', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div className="quota-track-bg" style={{ height: '6px' }}>
                         <div style={{ width: `${bPercent}%`, height: '100%', background: '#6366f1', borderRadius: '3px' }} />
                       </div>
                     </div>
@@ -414,9 +517,9 @@ export default function Usage() {
                     <div style={{ marginBottom: '0.25rem' }}>
                       <div className="flex-between mb-1" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
                         <span>Overage Minutes</span>
-                        <span className="mono">{period.extraMins} mins</span>
+                        <span className="mono tabular-nums">{period.extraMins} mins</span>
                       </div>
-                      <div style={{ width: '100%', height: '6px', background: '#27272a', borderRadius: '3px', overflow: 'hidden' }}>
+                      <div className="quota-track-bg" style={{ height: '6px' }}>
                         <div style={{ width: `${exPercent}%`, height: '100%', background: '#f59e0b', borderRadius: '3px' }} />
                       </div>
                     </div>

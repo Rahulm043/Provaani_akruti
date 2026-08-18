@@ -1,7 +1,11 @@
 import asyncio
 import json
+import os
 from api.db import db_client
 from sqlalchemy import text
+
+CEREBRAS_KEY = os.environ.get("CEREBRAS_API_KEY", "")
+SMALLEST_KEY = os.environ.get("SMALLEST_API_KEY", "")
 
 async def main():
     async with db_client.async_session() as session:
@@ -15,7 +19,7 @@ async def main():
         res = await session.execute(text("SELECT id FROM workflow_definitions WHERE workflow_id = 1 AND status = 'published';"))
         row = res.first()
 
-        # Update workflow configurations (LLM temp=0.1, TTS speed=0.9)
+        # Update workflow configurations (LLM temp=0.35, TTS speed=0.9)
         workflow_configurations = {
             "model_configuration_v2_override": {
                 "byok": {
@@ -25,14 +29,14 @@ async def main():
                             "provider": "openai",
                             "model": "gpt-oss-120b",
                             "base_url": "https://api.cerebras.ai/v1",
-                            "api_key": ["csk-wcpmyy58frvy386y8wjkxv39p2wmne6rkpv284hvfcwktnfj"],
-                            "temperature": 0.1
+                            "api_key": [CEREBRAS_KEY],
+                            "temperature": 0.35
                         },
                         "stt": {
                             "provider": "smallest",
                             "model": "pulse",
                             "language": "north_indic",
-                            "api_key": ["sk_d341cbfa5e2ad090db0691e1482590d6"],
+                            "api_key": [SMALLEST_KEY],
                             "keywords": "blepharoplasty, rhinoplasty, dimpleplasty, buccal fat, gynaecomastia, liposuction, abdominoplasty, tummy tuck, cryolipolysis, micropigmentation, akruti, anand, durgapur, burdwan"
                         },
                         "tts": {
@@ -41,7 +45,7 @@ async def main():
                             "voice": "meher",
                             "language": "auto",
                             "speed": 0.9,
-                            "api_key": ["sk_d341cbfa5e2ad090db0691e1482590d6"]
+                            "api_key": [SMALLEST_KEY]
                         }
                     }
                 },

@@ -1,5 +1,6 @@
 FROM dograhai/dograh-api:latest
 COPY patches/api/routes/campaign.py /app/api/routes/campaign.py
+COPY patches/api/routes/telephony.py /app/api/routes/telephony.py
 COPY patches/api/services/pipecat/run_pipeline.py /app/api/services/pipecat/run_pipeline.py
 COPY patches/api/services/pipecat/service_factory.py /app/api/services/pipecat/service_factory.py
 COPY patches/api/services/configuration/registry.py /app/api/services/configuration/registry.py

@@ -150,11 +150,20 @@ services:
       dockerfile: Dockerfile.api
     image: dograhtest-custom-api:latest
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     environment:
       # Core application config
       ENVIRONMENT: "${ENVIRONMENT:-local}"
       ENABLE_SIGNUP: "${ENABLE_SIGNUP:-false}"
       LOG_LEVEL: "INFO"
+
+      # AI Provider keys (used by warmup_daemon.py inside the container)
+      CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
+      SMALLEST_API_KEY: "${SMALLEST_API_KEY:-}"
 
       # Public origin for this deployment. The API derives BACKEND_API_ENDPOINT,
       # MINIO_PUBLIC_ENDPOINT and TURN_HOST from PUBLIC_BASE_URL / PUBLIC_HOST when
@@ -271,6 +280,11 @@ services:
     build: ./ui
     image: ${REGISTRY:-dograhai}/dograh-ui:latest
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     environment:
       # Bind the Next.js standalone server to all interfaces
       HOSTNAME: "0.0.0.0"
@@ -307,6 +321,11 @@ services:
     build: ./custom-ui
     container_name: dograhtest-custom-ui
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     ports:
       - "80:80"
       - "3011:80"
@@ -323,6 +342,11 @@ services:
     build: ./analysis-service
     container_name: dograhtest-analysis
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "20m"
+        max-file: "3"
     ports:
       - "127.0.0.1:8001:8001"
     environment:
