@@ -12,7 +12,7 @@ import { StatGridSkeleton } from '../components/Skeleton.jsx';
 // Plan Settings
 const LIMIT_MINUTES = 1000;
 const OVERAGE_RATE = 3.0; // Rs. 3 per minute
-const BILLING_START_DATE_STR = import.meta.env.VITE_BILLING_START_DATE || import.meta.env.VITE_START_DATE || '2026-08-18';
+const BILLING_START_DATE_STR = import.meta.env.VITE_BILLING_START_DATE || import.meta.env.VITE_START_DATE || '2026-08-19';
 
 // Helpers
 function getISTDate(isoString) {

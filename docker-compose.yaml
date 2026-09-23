@@ -164,6 +164,7 @@ services:
       # AI Provider keys (used by warmup_daemon.py inside the container)
       CEREBRAS_API_KEY: "${CEREBRAS_API_KEY:-}"
       SMALLEST_API_KEY: "${SMALLEST_API_KEY:-}"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
 
       # Public origin for this deployment. The API derives BACKEND_API_ENDPOINT,
       # MINIO_PUBLIC_ENDPOINT and TURN_HOST from PUBLIC_BASE_URL / PUBLIC_HOST when
@@ -356,6 +357,10 @@ services:
       DOGRAH_API_BASE: "http://api:8000"
       DOGRAH_API_KEY: "REPLACED_DOGRAH_API_KEY"
       API_BASE_URL: "http://analysis-service:8001"
+      WHATSAPP_ACCESS_TOKEN: "${WHATSAPP_ACCESS_TOKEN:-${FB_WHATSAPP_ACCESS_TOKEN_2}}"
+      WHATSAPP_PHONE_NUMBER_ID: "${WHATSAPP_PHONE_NUMBER_ID:-1409910712203417}"
+      WHATSAPP_TEMPLATE_NAME: "${WHATSAPP_TEMPLATE_NAME:-clinic_details}"
+      WHATSAPP_TEMPLATE_LANG: "${WHATSAPP_TEMPLATE_LANG:-en}"
     depends_on:
       api:
         condition: service_healthy

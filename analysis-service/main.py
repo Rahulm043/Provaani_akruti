@@ -15,7 +15,11 @@ import httpx
 import google.genai as genai
 from google.genai import types
 
-from whatsapp_service import send_whatsapp_clinic_details
+from whatsapp_service import (
+    send_whatsapp_clinic_details,
+    send_whatsapp_appointment_confirmation,
+    send_whatsapp_appointment_details
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -177,9 +181,11 @@ async def analyze_call(run_id: int, client):
         conn.commit()
         logger.info(f"Run {run_id} analyzed in {elapsed:.1f}s: sentiment={sentiment}")
 
-        # Post-call WhatsApp Dispatch via Wasender API for Akruti Aesthetics (Workflow 6)
+        # Post-call WhatsApp Dispatch for Akruti Aesthetics (Workflow 1)
         initial_ctx = run_data.get("initial_context", {}) or {}
+        gathered = run_data.get("gathered_context", {}) or {}
         caller_phone = (
+            gathered.get("whatsapp_number") or
             run_data.get("caller_number") or
             run_data.get("phone_number") or
             run_data.get("called_number") or
@@ -187,23 +193,31 @@ async def analyze_call(run_id: int, client):
             initial_ctx.get("phone_number")
         )
         wf_id = run_data.get("workflow_id", 1)
-        gathered = run_data.get("gathered_context", {}) or {}
-        caller_name = gathered.get("caller_name")
+        caller_name = gathered.get("caller_name") or gathered.get("patient_name")
         procedure = gathered.get("procedure_of_interest")
-        booking_requested = bool(gathered.get("booking_requested", False))
-        preferred_time = gathered.get("preferred_date_time")
+        booking_requested = gathered.get("booking_requested")
+        preferred_dt = gathered.get("preferred_date_time") or gathered.get("appointment_time")
+        branch = gathered.get("branch") or gathered.get("branch_name") or "durgapur"
 
         if caller_phone:
             logger.info(f"Triggering WhatsApp dispatch for run {run_id} (workflow {wf_id}) to {caller_phone}")
-            asyncio.create_task(
-                send_whatsapp_clinic_details(
-                    phone_number=caller_phone,
-                    caller_name=caller_name,
-                    procedure_of_interest=procedure,
-                    booking_requested=booking_requested,
-                    preferred_date_time=preferred_time
+            if booking_requested and preferred_dt:
+                asyncio.create_task(
+                    send_whatsapp_appointment_confirmation(
+                        phone_number=caller_phone,
+                        patient_name=caller_name,
+                        appointment_datetime=preferred_dt,
+                        branch_id_or_name=branch
+                    )
                 )
-            )
+            else:
+                asyncio.create_task(
+                    send_whatsapp_clinic_details(
+                        phone_number=caller_phone,
+                        caller_name=caller_name,
+                        procedure_of_interest=procedure,
+                    )
+                )
 
     except Exception as e:
         logger.error(f"Analysis failed for run {run_id}: {e}")
@@ -221,6 +235,41 @@ async def main():
     client = genai.Client(api_key=API_KEY)
 
     from aiohttp import web
+
+    async def handle_send_whatsapp(request):
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        phone_number = data.get("phone_number") or data.get("to") or data.get("number")
+        template_type = data.get("template_type") or data.get("type")
+        caller_name = data.get("caller_name") or data.get("patient_name") or data.get("name")
+        appointment_datetime = data.get("appointment_datetime") or data.get("appointment_date_time") or data.get("time")
+        branch = data.get("branch") or data.get("branch_id") or data.get("branch_name")
+
+        if not phone_number:
+            return web.json_response({"status": "error", "message": "phone_number is required"}, status=400)
+
+        if template_type == "appointment_confirmation" or (appointment_datetime and caller_name):
+            res = await send_whatsapp_appointment_confirmation(
+                phone_number=phone_number,
+                patient_name=caller_name,
+                appointment_datetime=appointment_datetime,
+                branch_id_or_name=branch
+            )
+        elif template_type == "appointment_details":
+            res = await send_whatsapp_appointment_details(
+                phone_number=phone_number,
+                branch_id_or_name=branch
+            )
+        else:
+            procedure = data.get("procedure_of_interest") or data.get("procedure")
+            res = await send_whatsapp_clinic_details(
+                phone_number=phone_number,
+                caller_name=caller_name,
+                procedure_of_interest=procedure
+            )
+        return web.json_response(res)
 
     async def handle_analyze(request):
         try:
@@ -267,6 +316,7 @@ async def main():
     app = web.Application()
     app.add_routes(
         [
+            web.post("/send-whatsapp", handle_send_whatsapp),
             web.post("/analyze/{run_id}", handle_analyze),
             web.get("/analyze/{run_id}", handle_get_analysis),
             web.get("/analyze", handle_list_analyses),

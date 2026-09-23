@@ -1,10 +1,14 @@
 import asyncio
+import json
+import time
 from typing import Optional
 
 import httpx
+import redis.asyncio as aioredis
 from fastapi import HTTPException
 from loguru import logger
 
+from api.constants import REDIS_URL
 from api.db import db_client
 from api.enums import WorkflowRunMode
 from api.schemas.workflow_configurations import (
@@ -109,6 +113,7 @@ from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
+from pipecat.frames.frames import TranscriptionFrame
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.enums import EndTaskReason, RealtimeFeedbackType
 from pipecat.utils.run_context import set_current_org_id, set_current_run_id
@@ -118,6 +123,54 @@ ensure_tracing()
 
 DEFAULT_USER_TURN_STOP_TIMEOUT = 1.5
 EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
+
+
+async def _dtmf_listener_loop(workflow_run_id: int, task, stop_event: asyncio.Event):
+    """Listen for completed DTMF sequences on Redis pub/sub and inject them into the pipeline."""
+    try:
+        redis_client = await aioredis.from_url(REDIS_URL, decode_responses=True)
+        pubsub = redis_client.pubsub()
+        channel_name = f"dtmf:channel:{workflow_run_id}"
+        await pubsub.subscribe(channel_name)
+        logger.info(f"[DTMF listener] Subscribed to {channel_name} for run {workflow_run_id}")
+
+        while not stop_event.is_set():
+            try:
+                # Wait for message with short timeout so we can check stop_event
+                msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
+                if msg and msg.get("type") == "message":
+                    raw_data = msg.get("data")
+                    if raw_data:
+                        payload = json.loads(raw_data)
+                        digits = payload.get("digits", "")
+                        if digits:
+                            logger.info(
+                                f"[DTMF listener] Received 10-digit keypad input for run {workflow_run_id}: {digits}"
+                            )
+                            # Queue a transcription frame into the pipeline
+                            frame = TranscriptionFrame(
+                                text=f"[Keypad Input Received: {digits}]",
+                                user_id="user",
+                                timestamp=str(time.time()),
+                                finalized=True,
+                            )
+                            await task.queue_frame(frame)
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.debug(f"[DTMF listener] Error in pubsub loop: {e}")
+                await asyncio.sleep(0.5)
+
+        try:
+            await pubsub.unsubscribe(channel_name)
+            await pubsub.close()
+            await redis_client.close()
+        except Exception:
+            pass
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        logger.error(f"[DTMF listener] Fatal error for run {workflow_run_id}: {e}")
 
 
 def _resolve_user_turn_stop_timeout(
@@ -224,7 +277,14 @@ def _create_realtime_user_turn_config(provider: str):
                 ],
                 stop=[SpeechTimeoutUserTurnStopStrategy(wait_for_transcript=False)],
             ),
-            SileroVADAnalyzer(params=VADParams(stop_secs=0.2)),
+            SileroVADAnalyzer(
+                params=VADParams(
+                    confidence=0.5,
+                    start_secs=0.15,
+                    stop_secs=0.2,
+                    min_volume=0.05,
+                )
+            ),
         )
 
     if provider in {
@@ -899,7 +959,14 @@ async def _run_pipeline_impl(
         FunctionCallUserMuteStrategy(),
         CallbackUserMuteStrategy(should_mute_callback=engine.should_mute_user),
     ]
-    user_vad_analyzer = SileroVADAnalyzer(params=VADParams(stop_secs=0.2))
+    user_vad_analyzer = SileroVADAnalyzer(
+        params=VADParams(
+            confidence=0.5,
+            start_secs=0.15,
+            stop_secs=0.2,
+            min_volume=0.05,
+        )
+    )
 
     # Configure turn strategies based on STT provider, model, and workflow configuration
     if is_realtime:
@@ -1184,6 +1251,12 @@ async def _run_pipeline_impl(
 
     register_audio_data_handler(audio_buffer, workflow_run_id, in_memory_audio_buffer)
 
+    # Start DTMF keypad input listener for this active call
+    dtmf_stop_event = asyncio.Event()
+    dtmf_listener_task = asyncio.create_task(
+        _dtmf_listener_loop(workflow_run_id, task, dtmf_stop_event)
+    )
+
     try:
         # Run the pipeline
         await run_pipeline_worker(task)
@@ -1192,6 +1265,14 @@ async def _run_pipeline_impl(
     except asyncio.CancelledError:
         logger.warning("Received CancelledError in _run_pipeline")
     finally:
+        dtmf_stop_event.set()
+        dtmf_listener_task.cancel()
+        try:
+            await dtmf_listener_task
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
         # Close MCP sessions here, not in engine.cleanup(). The anyio cancel
         # scopes opened by MCPClient.start() in engine.initialize() are
         # task-affine; this finally runs in the same task as initialize(),

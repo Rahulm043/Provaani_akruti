@@ -468,6 +468,7 @@ def create_stt_service(
             settings=SmallestSTTSettings(
                 model=user_config.stt.model,
                 language=pipecat_language,
+                endpointing=True,
             ),
             sample_rate=audio_config.transport_in_sample_rate,
         )
@@ -980,9 +981,14 @@ def create_llm_service_from_provider(
         if base_url:
             _validate_runtime_service_url(base_url, "base_url")
             kwargs["base_url"] = base_url
+        extra_settings = {"extra_body": {"reasoning": {"effort": "none"}}}
         return OpenRouterLLMService(
             api_key=api_key,
-            settings=OpenRouterLLMSettings(model=model, temperature=0.1),
+            settings=OpenRouterLLMSettings(
+                model=model,
+                temperature=0.1 if temperature is None else temperature,
+                extra=extra_settings,
+            ),
             **kwargs,
         )
     elif provider == ServiceProviders.GOOGLE.value:

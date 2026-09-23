@@ -1,7 +1,9 @@
 """
-Wasender WhatsApp Integration for Akruti Aesthetics Clinic (Workflow 6).
-Sends automated WhatsApp messages containing clinic details, addresses,
-contact numbers, and caller-requested procedure/booking information.
+Official Meta WhatsApp Cloud API Integration for Akruti Aesthetics Clinic (Workflow 1).
+Supports:
+1. 'clinic_details' - Static clinic overview & reception contacts.
+2. 'appointment_confirmation' - Dynamic confirmed consultation with Header (Patient Name) + 3 Body variables (Date/Time, Branch, Address).
+3. 'appointment_details' - Dynamic branch consultation hours & address (falls back to clinic_details if template not yet created).
 """
 
 import logging
@@ -11,91 +13,193 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-WASENDER_URL = os.getenv("WASENDER_URL", "https://wasenderapi.com/api/send-message")
-WASENDER_TOKEN = os.getenv(
-    "WASENDER_TOKEN",
-    "2de4a0aa5cd1ca6f8a890b7d78792abbd403b8d58313f33b5df882df00e4dbf8"
-)
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", os.getenv("FB_WHATSAPP_ACCESS_TOKEN_2", ""))
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "1409910712203417")
+WHATSAPP_TEMPLATE_LANG = os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
+
+# Clinic Branch Registry
+CLINIC_BRANCHES = {
+    "durgapur": {
+        "name": "Durgapur Clinic",
+        "address": "1st Floor, A-53, Maulana Azad Sarani, City Centre, Durgapur 713216",
+        "hours": "Mon–Fri: 9:00 AM – 7:00 PM"
+    },
+    "burdwan": {
+        "name": "Burdwan Clinic",
+        "address": "S. S. Doctor Centre, Power House Para, Near Park Nursing Home, Burdwan",
+        "hours": "Mon–Fri: 9:00 AM – 7:00 PM"
+    }
+}
+
 
 def normalize_phone_number(phone: str) -> str:
-    """Normalize phone number to standard E.164 string format (+91XXXXXXXXXX)."""
+    """
+    Normalize phone number to digits-only E.164 string format for Meta Cloud API (e.g., 91XXXXXXXXXX).
+    """
     if not phone:
         return ""
-    cleaned = re.sub(r"[^\d+]", "", phone.strip())
+    cleaned = re.sub(r"[^\d]", "", str(phone).strip())
     if not cleaned:
         return ""
-    if cleaned.startswith("+"):
-        return cleaned
     if len(cleaned) == 10 and cleaned.startswith(("6", "7", "8", "9")):
-        return f"+91{cleaned}"
+        return f"91{cleaned}"
+    if len(cleaned) == 11 and cleaned.startswith("0"):
+        return f"91{cleaned[1:]}"
     if len(cleaned) == 12 and cleaned.startswith("91"):
-        return f"+{cleaned}"
-    return f"+{cleaned}"
+        return cleaned
+    return cleaned
 
-async def send_whatsapp_clinic_details(
+
+async def send_whatsapp_template(
     phone_number: str,
-    caller_name: str = None,
-    procedure_of_interest: str = None,
-    booking_requested: bool = False,
-    preferred_date_time: str = None
-) -> bool:
+    template_name: str,
+    components: list = None,
+    language_code: str = None
+) -> dict:
     """
-    Sends WhatsApp message with clinic name, address, numbers, and requested procedure/booking details
-    via Wasender API.
+    Core dispatcher to Meta WhatsApp Cloud API.
     """
     target_phone = normalize_phone_number(phone_number)
     if not target_phone:
         logger.error(f"Invalid phone number provided for WhatsApp dispatch: '{phone_number}'")
-        return False
+        return {"success": False, "error": f"Invalid phone number: {phone_number}"}
 
-    name_str = f"Dear {caller_name.strip()},\n\n" if caller_name and caller_name.strip() else ""
-
-    extra_details = []
-    if procedure_of_interest and procedure_of_interest.strip():
-        extra_details.append(f"✨ *Procedure of Interest*: {procedure_of_interest.strip()}")
-    if booking_requested:
-        time_str = f" ({preferred_date_time.strip()})" if preferred_date_time and preferred_date_time.strip() else ""
-        extra_details.append(f"📅 *Consultation Booking Request*: Registered{time_str}")
-
-    extra_section = ("\n" + "\n".join(extra_details) + "\n") if extra_details else "\n"
-
-    message_text = (
-        "🏥 *Akruti Aesthetics & Plastic Surgery Clinic*\n"
-        "*(Lead Surgeon: Dr. Kaushal Priya Anand, M.B.B.S, M.S, M.Ch Plastic Surgeon)*\n\n"
-        f"{name_str}"
-        "Thank you for reaching out to us! Here are the clinic location & contact details:\n\n"
-        "📍 *Durgapur Clinic*:\n"
-        "1st Floor, A-53, Maulana Azad Sarani, City Centre, Durgapur, West Bengal 713216\n\n"
-        "📍 *Burdwan Clinic*:\n"
-        "S. S. Doctor Centre, Power House Para, Near Park Nursing Home, Burdwan\n\n"
-        "📞 *Contact Phone Numbers*:\n"
-        "+91 90020 08137 / +91 90020 08147 / +91 8031825997\n\n"
-        "✉️ *Email*: akrutiaestheticsurgery@gmail.com\n"
-        "🕒 *Clinic Hours*: Monday – Friday, 9:00 AM – 7:00 PM\n"
-        f"{extra_section}\n"
-        "Our team will be delighted to assist you further. Feel free to call us directly for appointments!"
-    )
-
+    url = f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
     headers = {
-        "Authorization": f"Bearer {WASENDER_TOKEN}",
+        "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "to": target_phone,
-        "text": message_text
-    }
 
-    logger.info(f"Dispatching WhatsApp message to {target_phone} via Wasender API...")
+    lang = language_code or WHATSAPP_TEMPLATE_LANG
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": target_phone,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {
+                "code": lang
+            }
+        }
+    }
+    if components:
+        payload["template"]["components"] = components
+
+    logger.info(f"Dispatching WhatsApp template '{template_name}' (lang={lang}) to {target_phone}...")
 
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            resp = await client.post(WASENDER_URL, headers=headers, json=payload)
-            if resp.status_code in (200, 201):
-                logger.info(f"WhatsApp message successfully sent to {target_phone}: {resp.text}")
-                return True
-            else:
-                logger.error(f"Failed to send WhatsApp message ({resp.status_code}): {resp.text}")
-                return False
+            resp = await client.post(url, headers=headers, json=payload)
+            status_code = resp.status_code
+
+            try:
+                res_json = resp.json()
+            except Exception:
+                res_json = {"raw": resp.text}
+
+            if status_code in (200, 201):
+                msg_id = res_json.get("messages", [{}])[0].get("id", "unknown")
+                logger.info(f"WhatsApp template successfully sent to {target_phone} (id: {msg_id})")
+                return {
+                    "success": True,
+                    "target_phone": target_phone,
+                    "message_id": msg_id,
+                    "template": template_name,
+                    "language": lang,
+                    "response": res_json
+                }
+
+            err_info = res_json.get("error", {})
+            err_msg = err_info.get("message", resp.text)
+            logger.warning(f"Meta Cloud API returned status {status_code} for template '{template_name}': {err_msg}")
+            return {
+                "success": False,
+                "status_code": status_code,
+                "error": f"Meta API Error: {err_msg}",
+                "target_phone": target_phone,
+                "template": template_name,
+                "response": res_json
+            }
+
     except Exception as e:
-        logger.error(f"Error calling Wasender API for {target_phone}: {e}")
-        return False
+        logger.error(f"Error calling Meta WhatsApp Cloud API for {target_phone}: {e}")
+        return {
+            "success": False,
+            "error": str(e),
+            "target_phone": target_phone,
+            "template": template_name
+        }
+
+
+async def send_whatsapp_clinic_details(
+    phone_number: str,
+    caller_name: str = None,
+    procedure_of_interest: str = None
+) -> dict:
+    """
+    Sends static 'clinic_details' template.
+    """
+    return await send_whatsapp_template(
+        phone_number=phone_number,
+        template_name="clinic_details"
+    )
+
+
+async def send_whatsapp_appointment_confirmation(
+    phone_number: str,
+    patient_name: str,
+    appointment_datetime: str,
+    branch_id_or_name: str
+) -> dict:
+    """
+    Sends 'appointment_confirmation' template with:
+    - Header (1 param): patient_name
+    - Body (3 params): {{1}} Date & Time, {{2}} Branch Name, {{3}} Full Address
+    """
+    # Resolve branch details
+    branch_key = (branch_id_or_name or "").lower()
+    if "burdwan" in branch_key:
+        branch_info = CLINIC_BRANCHES["burdwan"]
+    else:
+        branch_info = CLINIC_BRANCHES["durgapur"]
+
+    formatted_name = (patient_name or "Valued Patient").strip()
+    formatted_dt = (appointment_datetime or "Scheduled Consultation Time").strip()
+
+    components = [
+        {
+            "type": "header",
+            "parameters": [
+                {"type": "text", "text": formatted_name}
+            ]
+        },
+        {
+            "type": "body",
+            "parameters": [
+                {"type": "text", "text": formatted_dt},
+                {"type": "text", "text": branch_info["name"]},
+                {"type": "text", "text": branch_info["address"]}
+            ]
+        }
+    ]
+
+    return await send_whatsapp_template(
+        phone_number=phone_number,
+        template_name="appointment_confirmation",
+        components=components
+    )
+
+
+async def send_whatsapp_appointment_details(
+    phone_number: str,
+    branch_id_or_name: str = None
+) -> dict:
+    """
+    Sends branch appointment/consultation details.
+    Falls back gracefully to clinic_details until a dedicated appointment_details template is approved.
+    """
+    return await send_whatsapp_clinic_details(phone_number=phone_number)
+

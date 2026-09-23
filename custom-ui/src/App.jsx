@@ -1,15 +1,19 @@
 import React, { useState } from 'react';
 import { Routes, Route, NavLink, Navigate } from 'react-router-dom';
-import { Bot, LogOut, ChevronLeft, ChevronRight, BarChart3 } from 'lucide-react';
+import { Bot, LogOut, ChevronLeft, ChevronRight, BarChart3, Building2, CalendarClock } from 'lucide-react';
 import { AuthProvider, useAuth } from './components/AuthProvider.jsx';
 import LoginPage from './pages/LoginPage.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import Usage from './pages/Usage.jsx';
+import ClinicDetails from './pages/ClinicDetails.jsx';
+import Appointments from './pages/Appointments.jsx';
 import './index.css';
 
 const NAV_ITEMS = [
   { path: '/', icon: Bot, label: 'Call Logs' },
   { path: '/usage', icon: BarChart3, label: 'Usage' },
+  { path: '/clinic-details', icon: Building2, label: 'Clinic Details' },
+  { path: '/appointments', icon: CalendarClock, label: 'Appointments' },
 ];
 
 function MobileTopHeader({ onLogout }) {
@@ -123,6 +127,8 @@ function AppContent() {
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/usage" element={<Usage />} />
+          <Route path="/clinic-details" element={<ClinicDetails />} />
+          <Route path="/appointments" element={<Appointments />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -2,11 +2,9 @@ import asyncio, json
 from api.db import db_client
 
 async def main():
-    for run_id in [49, 47]:
-        rows = await db_client.execute_raw_query(f"SELECT id, mode, state, gathered_context, logs FROM workflow_runs WHERE id = {run_id};")
-        if not rows:
-            continue
-        row = rows[0]
+    rows = await db_client.execute_raw_query("SELECT id, mode, state, gathered_context, logs FROM workflow_runs ORDER BY id DESC LIMIT 3;")
+    for row in rows:
+        run_id = row.get("id")
         print(f"\n==================== RUN {run_id} (state: {row.get('state')}) ====================")
         print("GATHERED CONTEXT:", json.dumps(row.get("gathered_context"), ensure_ascii=False, indent=2))
         logs = row.get("logs") or {}

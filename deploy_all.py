@@ -25,16 +25,18 @@ def run_scp(local_path, remote_path):
         print(proc.stderr)
     return proc.returncode
 
-print("=== 1. Syncing patches & Dockerfile.api & .env ===")
+print("=== 1. Syncing patches, Dockerfile.api, .env, and analysis-service ===")
 run_scp("patches", "/home/rahul/Provaani_akruti/")
 run_scp("Dockerfile.api", "/home/rahul/Provaani_akruti/Dockerfile.api")
 run_scp(".env", "/home/rahul/Provaani_akruti/.env")
+run_scp("analysis-service", "/home/rahul/Provaani_akruti/")
 
 print("=== 2. Rebuilding and recreating API container ===")
 build_api = (
     "cd /home/rahul/Provaani_akruti && "
     "sudo docker build -t dograhtest-custom-api:latest -f Dockerfile.api . && "
-    "sudo docker compose up -d --no-deps api"
+    "sudo docker compose up -d --no-deps api && "
+    "sudo docker compose restart analysis"
 )
 run_ssh(build_api)
 
@@ -44,12 +46,18 @@ run_ssh(clean_db)
 
 print("=== 4. Syncing custom-ui to VM ===")
 run_scp("custom-ui/src", "/home/rahul/Provaani_akruti/custom-ui/")
+run_scp("custom-ui/public", "/home/rahul/Provaani_akruti/custom-ui/")
+run_scp("custom-ui/index.html", "/home/rahul/Provaani_akruti/custom-ui/index.html")
+run_scp("custom-ui/.dockerignore", "/home/rahul/Provaani_akruti/custom-ui/.dockerignore")
+run_scp("custom-ui/Dockerfile", "/home/rahul/Provaani_akruti/custom-ui/Dockerfile")
 
 print("=== 5. Rebuilding and restarting custom-ui container ===")
 build_ui = (
-    "cd /home/rahul/Provaani_akruti && sudo docker compose build custom-ui && sudo docker compose up -d --no-deps custom-ui"
+    "cd /home/rahul/Provaani_akruti && "
+    "sudo docker compose build --no-cache custom-ui && "
+    "sudo docker compose up -d --force-recreate --no-deps custom-ui"
 )
 run_ssh(build_ui)
 
 print("=== 6. Checking container statuses ===")
-run_ssh("sudo docker ps | grep -E 'custom-ui|api'")
+run_ssh("sudo docker ps | grep -E 'custom-ui|api|analysis'")

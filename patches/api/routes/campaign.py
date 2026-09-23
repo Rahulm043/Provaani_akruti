@@ -1,11 +1,15 @@
+import asyncio
 import json
+import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator, model_validator
+from sqlalchemy import text
 
 from api.constants import (
     DEFAULT_CAMPAIGN_RETRY_CONFIG,
@@ -21,6 +25,8 @@ from api.services.campaign.source_sync_factory import get_sync_service
 from api.services.quota_service import authorize_workflow_run_start
 from api.services.reports import generate_campaign_report_csv
 from api.services.storage import storage_fs
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/campaign")
 
@@ -504,7 +510,691 @@ async def get_campaigns(
         for c in campaigns
     ]
 
-    return CampaignsResponse(campaigns=campaign_responses)
+# =====================================================================
+# CLINIC-AGNOSTIC CLINIC DETAILS & APPOINTMENT SCHEDULING MANAGEMENT
+# =====================================================================
+from sqlalchemy import text
+from api.services.prompt_compiler import (
+    DEFAULT_CLINIC_SETTINGS,
+    compile_unified_prompt,
+)
+
+CLINIC_SETTINGS_KEY = "clinic_settings"
+BOOK_APPOINTMENT_TOOL_UUID = "c84e1234-5678-4321-9876-abcdef012345"
+
+
+class BranchInfoPayload(BaseModel):
+    id: str
+    name: str
+    address: str = ""
+    landmark: str = ""
+    phone: str = ""
+
+
+class TimeChunkPayload(BaseModel):
+    start: str
+    end: str
+
+
+class AppointmentConfigPayload(BaseModel):
+    enabled: bool = False
+    allow_booking: bool = True
+    schedule: Dict[str, Dict[str, List[TimeChunkPayload]]] = Field(default_factory=dict)
+
+
+class ClinicSettingsPayload(BaseModel):
+    clinic_name: str
+    doctor_name: str
+    doctor_credentials: Optional[str] = ""
+    official_reception: Optional[str] = ""
+    email: Optional[str] = ""
+    branches: List[BranchInfoPayload] = Field(default_factory=list)
+    procedures: Optional[str] = ""
+    special_notes: Optional[str] = ""
+    appointment_config: AppointmentConfigPayload
+
+
+class BookAppointmentPayload(BaseModel):
+    patient_name: str
+    phone_number: str
+    branch_id: str
+    appointment_date: str
+    appointment_time: str
+    procedure_of_interest: Optional[str] = ""
+    booked_by: Optional[str] = "voice_agent"
+    notes: Optional[str] = ""
+
+
+class UpdateAppointmentStatusPayload(BaseModel):
+    status: str
+    notes: Optional[str] = None
+
+
+class EditAppointmentPayload(BaseModel):
+    patient_name: Optional[str] = None
+    phone_number: Optional[str] = None
+    branch_id: Optional[str] = None
+    appointment_date: Optional[str] = None
+    appointment_time: Optional[str] = None
+    procedure_of_interest: Optional[str] = None
+    status: Optional[str] = None
+    notes: Optional[str] = None
+
+
+
+def parse_time_to_minutes(time_str: str) -> Optional[int]:
+    """Parse time strings like '11:00 AM', '03:30 PM', '15:30', '11:00' to minutes from midnight."""
+    if not time_str:
+        return None
+    clean = time_str.strip().upper().replace(".", "").strip()
+    clean = " ".join(clean.split())
+    for fmt in ("%I:%M %p", "%I:%M%p", "%I %p", "%H:%M", "%H:%M:%S"):
+        try:
+            t = datetime.strptime(clean, fmt)
+            return t.hour * 60 + t.minute
+        except ValueError:
+            continue
+    return None
+
+
+def is_time_in_chunks(time_minutes: int, chunks: List[Dict[str, str]]) -> bool:
+    """Check if time_minutes falls within any [start, end] chunk."""
+    for chunk in chunks:
+        start_min = parse_time_to_minutes(chunk.get("start", ""))
+        end_min = parse_time_to_minutes(chunk.get("end", ""))
+        if start_min is not None and end_min is not None:
+            if start_min <= time_minutes <= end_min:
+                return True
+    return False
+
+
+async def _resolve_org_id(request: Request) -> int:
+    """Extract organization_id from user auth header if available, else default to 1."""
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        try:
+            from api.services.auth.jwt import decode_access_token
+            token = auth_header.split(" ")[1]
+            token_data = decode_access_token(token)
+            if token_data and "sub" in token_data:
+                user = await db_client.get_user_by_id(int(token_data["sub"]))
+                if user and user.selected_organization_id:
+                    return user.selected_organization_id
+        except Exception:
+            pass
+    return 1
+
+
+@router.get("/clinic-settings")
+async def get_clinic_settings(
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """Retrieve the current organization's clinic details and appointment schedule."""
+    org_id = user.selected_organization_id
+    try:
+        async with db_client.async_session() as session:
+            res = await session.execute(
+                text("SELECT value FROM organization_configurations WHERE organization_id = :org_id AND LOWER(key) = LOWER(:key);"),
+                {"org_id": org_id, "key": CLINIC_SETTINGS_KEY},
+            )
+            row = res.first()
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, str):
+                    val = json.loads(val)
+                return {"success": True, "settings": val}
+    except Exception:
+        pass
+    return {"success": True, "settings": DEFAULT_CLINIC_SETTINGS}
+
+
+@router.post("/clinic-settings")
+async def update_clinic_settings(
+    payload: ClinicSettingsPayload,
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """
+    Save clinic details and appointment schedule, dynamically recompile
+    the voice agent system prompt, and gate the book_appointment tool in workflow_definitions.
+    """
+    org_id = user.selected_organization_id
+    settings_dict = payload.model_dump()
+    is_timings_enabled = bool(settings_dict.get("appointment_config", {}).get("enabled", False))
+    is_booking_enabled = is_timings_enabled and bool(settings_dict.get("appointment_config", {}).get("allow_booking", True))
+
+    # 1. Persist to organization_configurations
+    async with db_client.async_session() as session:
+        await session.execute(
+            text("""
+                INSERT INTO organization_configurations (organization_id, key, value, created_at, updated_at)
+                VALUES (:org_id, :key, :val, NOW(), NOW())
+                ON CONFLICT (organization_id, key) DO UPDATE
+                SET value = :val, updated_at = NOW();
+            """),
+            {"org_id": org_id, "key": CLINIC_SETTINGS_KEY, "val": json.dumps(settings_dict)},
+        )
+        await session.commit()
+
+    # 2. Compile updated clinic-agnostic voice agent prompt
+    new_prompt = compile_unified_prompt(settings_dict)
+
+    # 3. Update published workflow definition in PostgreSQL (prompt + tool gating)
+    async with db_client.async_session() as session:
+        res = await session.execute(
+            text("""
+                SELECT wd.id, wd.workflow_json 
+                FROM workflow_definitions wd
+                JOIN workflows w ON wd.workflow_id = w.id
+                WHERE (w.organization_id = :org_id OR :org_id IS NULL OR w.id = 1)
+                  AND wd.status = 'published'
+                ORDER BY wd.id DESC LIMIT 1;
+            """),
+            {"org_id": org_id},
+        )
+        row = res.first()
+        if row:
+            def_id = row.id
+            wf_json = row.workflow_json
+            if isinstance(wf_json, str):
+                wf_json = json.loads(wf_json)
+
+            nodes = wf_json.get("nodes", [])
+            for node in nodes:
+                node_data = node.get("data", {})
+                if node.get("type") in ("startCall", "agentNode") or node_data.get("is_start"):
+                    node["data"]["prompt"] = new_prompt
+                    
+                    # Tool schema gating: Level 1 master toggle
+                    tools = list(node_data.get("tool_uuids") or [])
+                    if is_booking_enabled:
+                        if BOOK_APPOINTMENT_TOOL_UUID not in tools:
+                            tools.append(BOOK_APPOINTMENT_TOOL_UUID)
+                    else:
+                        tools = [t for t in tools if t != BOOK_APPOINTMENT_TOOL_UUID]
+                    node["data"]["tool_uuids"] = tools
+                    break
+            else:
+                if nodes and "data" in nodes[0]:
+                    nodes[0]["data"]["prompt"] = new_prompt
+                    tools = list(nodes[0]["data"].get("tool_uuids") or [])
+                    if is_booking_enabled:
+                        if BOOK_APPOINTMENT_TOOL_UUID not in tools:
+                            tools.append(BOOK_APPOINTMENT_TOOL_UUID)
+                    else:
+                        tools = [t for t in tools if t != BOOK_APPOINTMENT_TOOL_UUID]
+                    nodes[0]["data"]["tool_uuids"] = tools
+
+            await session.execute(
+                text("""
+                    UPDATE workflow_definitions
+                    SET workflow_json = :data
+                    WHERE id = :id;
+                """),
+                {"data": json.dumps(wf_json), "id": def_id},
+            )
+            await session.commit()
+
+    return {
+        "success": True,
+        "message": "Clinic settings saved, voice agent prompt updated, and booking tools synced successfully",
+        "settings": settings_dict,
+    }
+
+
+@router.get("/appointments")
+async def get_appointments(
+    appointment_date: Optional[str] = Query(None, description="YYYY-MM-DD date filter"),
+    branch_id: Optional[str] = Query(None, description="Filter by branch ID"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    search: Optional[str] = Query(None, description="Search by patient name, phone, or procedure"),
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """Retrieve appointments with daily shift statistics and filtering for reception staff."""
+    org_id = user.selected_organization_id or 1
+    
+    conditions = ["organization_id = :org_id"]
+    params: Dict[str, Any] = {"org_id": org_id}
+    
+    if appointment_date:
+        try:
+            parsed_date = datetime.strptime(appointment_date.strip(), "%Y-%m-%d").date()
+            conditions.append("appointment_date = :appointment_date")
+            params["appointment_date"] = parsed_date
+        except ValueError:
+            pass
+        
+    if branch_id and branch_id != "all":
+        conditions.append("branch_id = :branch_id")
+        params["branch_id"] = branch_id
+        
+    if status and status != "all":
+        conditions.append("status = :status")
+        params["status"] = status
+        
+    if search:
+        conditions.append("(patient_name ILIKE :search OR phone_number ILIKE :search OR procedure_of_interest ILIKE :search)")
+        params["search"] = f"%{search.strip()}%"
+        
+    where_clause = " AND ".join(conditions)
+    
+    async with db_client.async_session() as session:
+        # 1. Fetch filtered appointments
+        stmt = text(f"""
+            SELECT id, organization_id, branch_id, branch_name, patient_name, phone_number,
+                   procedure_of_interest, appointment_date, appointment_time, time_window,
+                   booked_by, status, notes, whatsapp_sent, created_at, updated_at
+            FROM appointments
+            WHERE {where_clause}
+            ORDER BY appointment_date ASC, appointment_time ASC;
+        """)
+        res = await session.execute(stmt, params)
+        rows = res.fetchall()
+        
+        appointments = []
+        for r in rows:
+            appointments.append({
+                "id": r.id,
+                "organization_id": r.organization_id,
+                "branch_id": r.branch_id,
+                "branch_name": r.branch_name,
+                "patient_name": r.patient_name,
+                "phone_number": r.phone_number,
+                "procedure_of_interest": r.procedure_of_interest or "",
+                "appointment_date": str(r.appointment_date),
+                "appointment_time": r.appointment_time,
+                "time_window": r.time_window or "",
+                "booked_by": r.booked_by,
+                "status": r.status,
+                "notes": r.notes or "",
+                "whatsapp_sent": bool(r.whatsapp_sent),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
+                "updated_at": r.updated_at.isoformat() if r.updated_at else None,
+            })
+            
+        # 2. Shift Metrics
+        metrics_conditions = ["organization_id = :org_id"]
+        metrics_params: Dict[str, Any] = {"org_id": org_id}
+        if appointment_date:
+            try:
+                parsed_date = datetime.strptime(appointment_date.strip(), "%Y-%m-%d").date()
+                metrics_conditions.append("appointment_date = :appointment_date")
+                metrics_params["appointment_date"] = parsed_date
+            except ValueError:
+                pass
+        if branch_id and branch_id != "all":
+            metrics_conditions.append("branch_id = :branch_id")
+            metrics_params["branch_id"] = branch_id
+            
+        metrics_where = " AND ".join(metrics_conditions)
+        metrics_res = await session.execute(
+            text(f"""
+                SELECT 
+                    COUNT(*) as total,
+                    COUNT(*) FILTER (WHERE status = 'confirmed') as confirmed,
+                    COUNT(*) FILTER (WHERE status = 'completed') as completed,
+                    COUNT(*) FILTER (WHERE status = 'cancelled') as cancelled,
+                    COUNT(*) FILTER (WHERE status = 'no_show') as no_show
+                FROM appointments
+                WHERE {metrics_where};
+            """),
+            metrics_params,
+        )
+        metrics_row = metrics_res.first()
+        shift_metrics = {
+            "total": int(metrics_row.total) if metrics_row else 0,
+            "confirmed": int(metrics_row.confirmed) if metrics_row else 0,
+            "completed": int(metrics_row.completed) if metrics_row else 0,
+            "cancelled": int(metrics_row.cancelled) if metrics_row else 0,
+            "no_show": int(metrics_row.no_show) if metrics_row else 0,
+        }
+        
+    return {
+        "success": True,
+        "appointments": appointments,
+        "shift_metrics": shift_metrics,
+        "count": len(appointments),
+    }
+
+
+@router.post("/appointments/book")
+async def book_appointment(
+    payload: BookAppointmentPayload,
+    request: Request,
+) -> Dict[str, Any]:
+    """
+    Dual-access endpoint for booking patient consultations (Staff Dashboard & Voice AI Agent).
+    Enforces strict two-level validation against clinic hours and weekly chunk sessions.
+    """
+    org_id = await _resolve_org_id(request)
+    
+    # 1. Fetch clinic configuration
+    settings_dict = DEFAULT_CLINIC_SETTINGS
+    try:
+        async with db_client.async_session() as session:
+            res = await session.execute(
+                text("SELECT value FROM organization_configurations WHERE organization_id = :org_id AND key = :key;"),
+                {"org_id": org_id, "key": CLINIC_SETTINGS_KEY},
+            )
+            row = res.first()
+            if row and row[0]:
+                val = row[0]
+                if isinstance(val, str):
+                    val = json.loads(val)
+                settings_dict = val
+    except Exception:
+        pass
+        
+    appt_cfg = settings_dict.get("appointment_config", {})
+    
+    # Level 1 Gate: Master Toggles (applies to Voice AI Agent)
+    is_staff = (payload.booked_by == "staff") or bool(request.headers.get("authorization"))
+    if not is_staff:
+        if not appt_cfg.get("enabled", False):
+            return {
+                "success": False,
+                "error": "Appointment scheduling is currently paused at the clinic. Please connect with our reception desk.",
+            }
+        if not appt_cfg.get("allow_booking", True):
+            reception = settings_dict.get("official_reception", "our clinic reception")
+            return {
+                "success": False,
+                "error": f"Direct appointment booking is handled by our reception desk. Please contact reception at {reception} to schedule.",
+            }
+        
+    # Level 2 Gate: Branch verification
+    branches = settings_dict.get("branches", [])
+    branch_map = {b.get("id", "").lower(): b for b in branches}
+    req_branch_id = payload.branch_id.strip().lower()
+    
+    matched_branch = branch_map.get(req_branch_id)
+    if not matched_branch:
+        for b in branches:
+            if req_branch_id in b.get("id", "").lower() or req_branch_id in b.get("name", "").lower():
+                matched_branch = b
+                req_branch_id = b.get("id", "").lower()
+                break
+                
+    if not matched_branch:
+        valid_names = ", ".join([b.get("name", b.get("id", "")) for b in branches])
+        return {
+            "success": False,
+            "error": f"Branch '{payload.branch_id}' was not recognized. Available branches: {valid_names}.",
+        }
+        
+    branch_name = matched_branch.get("name", req_branch_id.capitalize())
+    
+    # Date validation
+    try:
+        target_date = datetime.strptime(payload.appointment_date.strip(), "%Y-%m-%d").date()
+    except ValueError:
+        return {
+            "success": False,
+            "error": f"Invalid appointment date format '{payload.appointment_date}'. Please provide date in YYYY-MM-DD format.",
+        }
+        
+    day_name = target_date.strftime("%A").lower()
+    
+    # Schedule check
+    schedule = appt_cfg.get("schedule", {})
+    branch_schedule = schedule.get(req_branch_id, {})
+    day_chunks = branch_schedule.get(day_name, [])
+    
+    if not day_chunks:
+        return {
+            "success": False,
+            "error": f"{branch_name} is closed on {day_name.capitalize()}s. Please choose another day or branch.",
+        }
+        
+    # Time chunk check
+    req_time_min = parse_time_to_minutes(payload.appointment_time)
+    if req_time_min is None:
+        return {
+            "success": False,
+            "error": f"Invalid appointment time format '{payload.appointment_time}'. Please provide a valid time such as '11:30 AM' or '04:00 PM'.",
+        }
+        
+    if not is_time_in_chunks(req_time_min, day_chunks):
+        chunk_strs = [f"{c.get('start')} to {c.get('end')}" for c in day_chunks if c.get('start') and c.get('end')]
+        avail_text = ", ".join(chunk_strs) if chunk_strs else "Closed"
+        return {
+            "success": False,
+            "error": f"The requested time {payload.appointment_time} is outside operating hours for {branch_name} on {day_name.capitalize()}. Available session timings are: {avail_text}. Please choose a time within these slots.",
+        }
+        
+    # Insert confirmed appointment record
+    async with db_client.async_session() as session:
+        insert_stmt = text("""
+            INSERT INTO appointments (
+                organization_id, branch_id, branch_name, patient_name, phone_number,
+                procedure_of_interest, appointment_date, appointment_time,
+                booked_by, status, notes, whatsapp_sent, created_at, updated_at
+            ) VALUES (
+                :org_id, :branch_id, :branch_name, :patient_name, :phone_number,
+                :procedure_of_interest, :appointment_date, :appointment_time,
+                :booked_by, 'confirmed', :notes, FALSE, NOW(), NOW()
+            ) RETURNING id;
+        """)
+        res = await session.execute(
+            insert_stmt,
+            {
+                "org_id": org_id,
+                "branch_id": req_branch_id,
+                "branch_name": branch_name,
+                "patient_name": payload.patient_name.strip(),
+                "phone_number": payload.phone_number.strip(),
+                "procedure_of_interest": (payload.procedure_of_interest or "").strip(),
+                "appointment_date": target_date,
+                "appointment_time": payload.appointment_time.strip(),
+                "booked_by": payload.booked_by or "voice_agent",
+                "notes": (payload.notes or "").strip(),
+            },
+        )
+        new_row = res.first()
+        appointment_id = new_row[0] if new_row else None
+        await session.commit()
+
+    # Automatically dispatch WhatsApp appointment confirmation in background
+    if appointment_id and payload.phone_number:
+        async def _dispatch_whatsapp_async(appt_id: int, p_num: str, p_name: str, a_dt: str, b_name: str, proc: str):
+            endpoints = [
+                "http://dograhtest-analysis:8001/send-whatsapp",
+                "http://127.0.0.1:8001/send-whatsapp",
+            ]
+            whatsapp_body = {
+                "template_type": "appointment_confirmation",
+                "phone_number": p_num,
+                "caller_name": p_name,
+                "appointment_datetime": a_dt,
+                "branch": b_name,
+                "procedure_of_interest": proc,
+            }
+            try:
+                async with httpx.AsyncClient(timeout=10.0) as client:
+                    for ep in endpoints:
+                        try:
+                            resp = await client.post(ep, json=whatsapp_body)
+                            if resp.status_code in (200, 201):
+                                res_json = resp.json()
+                                if res_json.get("success"):
+                                    logger.info(f"WhatsApp confirmation dispatched for appointment {appt_id} to {p_num}")
+                                    async with db_client.async_session() as s:
+                                        await s.execute(
+                                            text("UPDATE appointments SET whatsapp_sent = TRUE, updated_at = NOW() WHERE id = :id;"),
+                                            {"id": appt_id}
+                                        )
+                                        await s.commit()
+                                    break
+                        except Exception as ep_err:
+                            logger.debug(f"WhatsApp dispatch attempt failed on {ep}: {ep_err}")
+            except Exception as exc:
+                logger.error(f"Error in async WhatsApp dispatch for appointment {appt_id}: {exc}")
+
+        formatted_datetime = f"{target_date.strftime('%A, %d %B %Y')} at {payload.appointment_time.strip()}"
+        asyncio.create_task(_dispatch_whatsapp_async(
+            appointment_id,
+            payload.phone_number.strip(),
+            payload.patient_name.strip(),
+            formatted_datetime,
+            branch_name,
+            (payload.procedure_of_interest or "").strip()
+        ))
+        
+    return {
+        "success": True,
+        "booking_id": appointment_id,
+        "message": f"Appointment successfully confirmed for {payload.patient_name} on {payload.appointment_date} at {payload.appointment_time} at {branch_name}.",
+        "appointment": {
+            "id": appointment_id,
+            "patient_name": payload.patient_name,
+            "phone_number": payload.phone_number,
+            "branch_id": req_branch_id,
+            "branch_name": branch_name,
+            "appointment_date": str(target_date),
+            "appointment_time": payload.appointment_time,
+            "procedure_of_interest": payload.procedure_of_interest,
+            "booked_by": payload.booked_by or "voice_agent",
+            "status": "confirmed",
+        },
+    }
+
+
+@router.patch("/appointments/{appointment_id}/status")
+async def update_appointment_status(
+    appointment_id: int,
+    payload: UpdateAppointmentStatusPayload,
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """Update appointment status (confirmed, completed, cancelled, no_show) and notes."""
+    org_id = user.selected_organization_id or 1
+    valid_statuses = ("confirmed", "completed", "cancelled", "no_show")
+    if payload.status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status '{payload.status}'. Valid statuses: {valid_statuses}")
+        
+    async with db_client.async_session() as session:
+        if payload.notes is not None:
+            stmt = text("""
+                UPDATE appointments
+                SET status = :status, notes = :notes, updated_at = NOW()
+                WHERE id = :id AND organization_id = :org_id
+                RETURNING id;
+            """)
+            params = {"status": payload.status, "notes": payload.notes, "id": appointment_id, "org_id": org_id}
+        else:
+            stmt = text("""
+                UPDATE appointments
+                SET status = :status, updated_at = NOW()
+                WHERE id = :id AND organization_id = :org_id
+                RETURNING id;
+            """)
+            params = {"status": payload.status, "id": appointment_id, "org_id": org_id}
+            
+        res = await session.execute(stmt, params)
+        if not res.first():
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        await session.commit()
+        
+    return {"success": True, "message": f"Appointment #{appointment_id} status updated to {payload.status}"}
+
+
+@router.patch("/appointments/{appointment_id}")
+async def edit_appointment(
+    appointment_id: int,
+    payload: EditAppointmentPayload,
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """Edit appointment details, status, or notes."""
+    org_id = user.selected_organization_id or 1
+    
+    async with db_client.async_session() as session:
+        res = await session.execute(
+            text("SELECT id, branch_id, appointment_date, appointment_time FROM appointments WHERE id = :id AND organization_id = :org_id;"),
+            {"id": appointment_id, "org_id": org_id},
+        )
+        existing = res.first()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Appointment not found")
+            
+        update_fields = {}
+        if payload.patient_name is not None and payload.patient_name.strip():
+            update_fields["patient_name"] = payload.patient_name.strip()
+            
+        if payload.phone_number is not None and payload.phone_number.strip():
+            update_fields["phone_number"] = payload.phone_number.strip()
+            
+        if payload.procedure_of_interest is not None:
+            update_fields["procedure_of_interest"] = payload.procedure_of_interest.strip()
+            
+        if payload.notes is not None:
+            update_fields["notes"] = payload.notes.strip()
+            
+        if payload.status is not None:
+            valid_statuses = ("confirmed", "completed", "cancelled", "no_show")
+            if payload.status not in valid_statuses:
+                raise HTTPException(status_code=400, detail=f"Invalid status '{payload.status}'")
+            update_fields["status"] = payload.status
+            
+        if payload.branch_id is not None and payload.branch_id.strip():
+            target_branch_id = payload.branch_id.strip().lower()
+            update_fields["branch_id"] = target_branch_id
+            try:
+                cfg_res = await session.execute(
+                    text("SELECT value FROM organization_configurations WHERE organization_id = :org_id AND key = :key;"),
+                    {"org_id": org_id, "key": CLINIC_SETTINGS_KEY},
+                )
+                cfg_row = cfg_res.first()
+                if cfg_row and cfg_row[0]:
+                    s = cfg_row[0]
+                    if isinstance(s, str):
+                        s = json.loads(s)
+                    for b in s.get("branches", []):
+                        if b.get("id", "").lower() == target_branch_id:
+                            update_fields["branch_name"] = b.get("name", target_branch_id.capitalize())
+                            break
+            except Exception:
+                pass
+                
+        if payload.appointment_date is not None and payload.appointment_date.strip():
+            try:
+                parsed_d = datetime.strptime(payload.appointment_date.strip(), "%Y-%m-%d").date()
+                update_fields["appointment_date"] = parsed_d
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD.")
+                
+        if payload.appointment_time is not None and payload.appointment_time.strip():
+            update_fields["appointment_time"] = payload.appointment_time.strip()
+            
+        if not update_fields:
+            return {"success": True, "message": "No changes were made."}
+            
+        set_clauses = [f"{k} = :{k}" for k in update_fields.keys()]
+        set_clauses.append("updated_at = NOW()")
+        params = {**update_fields, "id": appointment_id, "org_id": org_id}
+        
+        await session.execute(
+            text(f"UPDATE appointments SET {', '.join(set_clauses)} WHERE id = :id AND organization_id = :org_id;"),
+            params,
+        )
+        await session.commit()
+        
+    return {"success": True, "message": f"Appointment #{appointment_id} updated successfully"}
+
+
+@router.delete("/appointments/{appointment_id}")
+async def delete_appointment(
+    appointment_id: int,
+    user: UserModel = Depends(get_user),
+) -> Dict[str, Any]:
+    """Delete an appointment record."""
+    org_id = user.selected_organization_id or 1
+    async with db_client.async_session() as session:
+        res = await session.execute(
+            text("DELETE FROM appointments WHERE id = :id AND organization_id = :org_id RETURNING id;"),
+            {"id": appointment_id, "org_id": org_id},
+        )
+        if not res.first():
+            raise HTTPException(status_code=404, detail="Appointment not found")
+        await session.commit()
+    return {"success": True, "message": f"Appointment #{appointment_id} deleted successfully"}
 
 
 @router.get("/{campaign_id}")
@@ -1022,3 +1712,5 @@ async def download_campaign_report(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+

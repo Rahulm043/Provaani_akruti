@@ -26,13 +26,17 @@ def run_scp(local_path, remote_path):
     return proc.returncode
 
 print("=== 1. Syncing custom-ui files to VM ===")
-run_scp("custom-ui/public", "/home/rahul/Provaani_akruti/custom-ui/")
 run_scp("custom-ui/src", "/home/rahul/Provaani_akruti/custom-ui/")
+run_scp("custom-ui/public", "/home/rahul/Provaani_akruti/custom-ui/")
 run_scp("custom-ui/index.html", "/home/rahul/Provaani_akruti/custom-ui/index.html")
+run_scp("custom-ui/.dockerignore", "/home/rahul/Provaani_akruti/custom-ui/.dockerignore")
+run_scp("custom-ui/Dockerfile", "/home/rahul/Provaani_akruti/custom-ui/Dockerfile")
 
-print("=== 2. Rebuilding and restarting custom-ui container ===")
+print("=== 2. Rebuilding and recreating custom-ui container without cache ===")
 build_ui = (
-    "cd /home/rahul/Provaani_akruti && sudo docker compose build custom-ui && sudo docker compose up -d --no-deps custom-ui"
+    "cd /home/rahul/Provaani_akruti && "
+    "sudo docker compose build --no-cache custom-ui && "
+    "sudo docker compose up -d --force-recreate --no-deps custom-ui"
 )
 run_ssh(build_ui)
 

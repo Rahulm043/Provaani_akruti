@@ -14,7 +14,7 @@ import { StatGridSkeleton, TableSkeleton } from '../components/Skeleton.jsx';
 import RecordingPlayer from '../components/RecordingPlayer.jsx';
 
 // --- IST Date & Period Filtering Helpers ---
-const START_DATE_STR = import.meta.env.VITE_START_DATE || import.meta.env.VITE_BILLING_START_DATE || '2026-08-18';
+const START_DATE_STR = import.meta.env.VITE_START_DATE || import.meta.env.VITE_BILLING_START_DATE || '2026-08-19';
 
 function getISTDate(isoString) {
   const d = isoString ? parseSafeDate(isoString) : new Date();

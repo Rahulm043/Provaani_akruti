@@ -19,6 +19,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 # Read keys from environment — the API container injects these via docker-compose
 CEREBRAS_API_KEY = os.environ.get("CEREBRAS_API_KEY", "")
 SMALLEST_API_KEY = os.environ.get("SMALLEST_API_KEY", "")
+OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
 
 
 async def warm_internal_api(client: httpx.AsyncClient):
@@ -30,6 +31,8 @@ async def warm_internal_api(client: httpx.AsyncClient):
         logging.warning(f"[Warmup] Internal API error: {e}")
 
 async def warm_cerebras_llm(client: httpx.AsyncClient):
+    if not CEREBRAS_API_KEY:
+        return
     try:
         t0 = time.time()
         resp = await client.post(
@@ -46,7 +49,28 @@ async def warm_cerebras_llm(client: httpx.AsyncClient):
     except Exception as e:
         logging.warning(f"[Warmup] Cerebras error: {e}")
 
+async def warm_openrouter_llm(client: httpx.AsyncClient):
+    if not OPENROUTER_API_KEY:
+        return
+    try:
+        t0 = time.time()
+        resp = await client.post(
+            "https://openrouter.ai/api/v1/chat/completions",
+            headers={"Authorization": f"Bearer {OPENROUTER_API_KEY}", "Content-Type": "application/json"},
+            json={
+                "model": "google/gemini-2.5-flash-lite",
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 2
+            },
+            timeout=8.0
+        )
+        logging.info(f"[Warmup] OpenRouter Gemini LLM: {resp.status_code} in {time.time()-t0:.3f}s")
+    except Exception as e:
+        logging.warning(f"[Warmup] OpenRouter error: {e}")
+
 async def warm_smallest_tts(client: httpx.AsyncClient):
+    if not SMALLEST_API_KEY:
+        return
     try:
         t0 = time.time()
         resp = await client.post(
@@ -64,6 +88,7 @@ async def run_warmup():
         await asyncio.gather(
             warm_internal_api(client),
             warm_cerebras_llm(client),
+            warm_openrouter_llm(client),
             warm_smallest_tts(client),
             return_exceptions=True
         )
