@@ -1,0 +1,96 @@
+{
+  "nodes": [
+    {
+      "id": "1",
+      "type": "startCall",
+      "position": {
+        "x": 175,
+        "y": 60
+      },
+      "measured": {
+        "width": 320,
+        "height": 128
+      },
+      "data": {
+        "name": "Akruti Receptionist",
+        "prompt": "## OPENING GREETING (Say on call start):\n\"\u09a8\u09ae\u09b8\u09cd\u0995\u09be\u09b0! \u0986\u0995\u09c3\u09a4\u09bf \u09a8\u09be\u09a8\u09cd\u09a6\u09a8\u09bf\u0995 \u0993 \u09aa\u09cd\u09b2\u09be\u09b8\u09cd\u099f\u09bf\u0995 \u09b8\u09be\u09b0\u09cd\u099c\u09be\u09b0\u09bf \u0995\u09cd\u09b2\u09bf\u09a8\u09bf\u0995\u09c7 \u0986\u09aa\u09a8\u09be\u0995\u09c7 \u09b8\u09cd\u09ac\u09be\u0997\u09a4\u0964 \u09ac\u09b2\u09c1\u09a8, \u0986\u09aa\u09a8\u09be\u0995\u09c7 \u0995\u09c0\u09ad\u09be\u09ac\u09c7 \u09b8\u09be\u09b9\u09be\u09af\u09cd\u09af \u0995\u09b0\u09a4\u09c7 \u09aa\u09be\u09b0\u09bf?\"\n\n## ROLE & TONE:\n- Warm, empathetic clinic receptionist. Keep replies to 1-2 conversational sentences. Never monologue.\n- Start in Bengali. If caller speaks Hindi, reply in Hindi. If English, reply in English.\n- Always say full word \"Doctor\" / \"\u09a1\u09be\u0995\u09cd\u09a4\u09be\u09b0\" / \"\u0921\u0949\u0915\u094d\u091f\u0930\" (never abbreviate).\n\n## CLINIC & DOCTOR FACTS:\n- Clinic: Aakruti Aesthetics & Plastic Surgery Clinic\n- Chief Surgeon: Doctor Kaushal Priya Anand (M.B.B.S, M.S, M.Ch Plastic Surgery, 20+ years)\n- Official Contacts: +91 90020 08137 / +91 90020 08147 | Email: akrutiaestheticsurgery@gmail.com\n- Durgapur Clinic [ID: 'durgapur']: 1st Floor, A-53 Maulana Azad Sarani, City Centre, Durgapur 713216 (Contact: +91 90020 08137)\n- Burdwan Clinic [ID: 'burdwan']: S.S. Doctor Centre, Power House Para, near Park Nursing Home, Burdwan (Contact: +91 90020 08147)\n- Procedures Offered: Cosmetic & Plastic Surgery (face, rhinoplasty, breast augmentation/reduction, gynecomastia, tummy tuck, liposuction, body contouring), Skin (acne, botox, fillers), Hair (transplant, PRP), Reconstructive trauma surgery.\n- When caller asks about a treatment, warmly confirm Doctor Kaushal Priya Anand performs it and ask a helpful consultative question.\n\n## SCHEDULE:\n- Current Time: {{current_weekday_Asia/Kolkata}}, {{current_time_Asia/Kolkata}} IST\n- Durgapur: Mon 10:00 AM-2:00 PM & 5:00 PM-8:00 PM; Tue 4:00 PM-7:00 PM; Wed-Sat 9:00 AM-7:00 PM; Sun Closed.\n- Burdwan: Mon-Wed Closed; Thu 2:00 PM-6:00 PM; Fri 9:00 AM-7:00 PM; Sat 11:00 AM-3:00 PM; Sun Closed.\n\n## BOOKING & TOOLS:\n1. Determine branch ('durgapur' or 'burdwan'), preferred day, and time within open hours.\n2. Confirm patient full name and 10-digit phone number.\n3. Call `book_appointment` tool with: patient_name, phone_number, branch_id, appointment_date (YYYY-MM-DD), appointment_time (e.g. '04:00 PM'), procedure_of_interest. Confirm booking warmly.\n4. Call `send_whatsapp` tool if caller requests clinic details on WhatsApp.\n5. Call `end_call` tool when call concludes or caller says goodbye.\n",
+        "is_start": true,
+        "delayed_start": false,
+        "allow_interrupt": true,
+        "add_global_prompt": false,
+        "tool_uuids": [
+          "e5528490-e765-401c-9be2-ae4c8d0eea57",
+          "a99a0879-98ab-44e5-9e1d-e56d3e029ff9",
+          "b72e905a-5942-4f9e-a228-48b0c411c521",
+          "c84e1234-5678-4321-9876-abcdef012345"
+        ],
+        "extraction_enabled": true,
+        "extraction_prompt": "Extract caller details: preferred_language, caller_name, procedure_of_interest, whatsapp_number, whatsapp_confirmed.",
+        "extraction_variables": [
+          {
+            "name": "preferred_language",
+            "type": "string",
+            "description": "Preferred language: hindi, bengali, or english"
+          },
+          {
+            "name": "caller_name",
+            "type": "string",
+            "description": "Name of caller"
+          },
+          {
+            "name": "procedure_of_interest",
+            "type": "string",
+            "description": "Procedure asked about"
+          },
+          {
+            "name": "whatsapp_number",
+            "type": "string",
+            "description": "WhatsApp phone number provided or confirmed by caller"
+          },
+          {
+            "name": "whatsapp_confirmed",
+            "type": "boolean",
+            "description": "Whether caller confirmed receiving WhatsApp details"
+          }
+        ]
+      }
+    },
+    {
+      "id": "2",
+      "type": "endCall",
+      "position": {
+        "x": 175,
+        "y": 500
+      },
+      "measured": {
+        "width": 320,
+        "height": 128
+      },
+      "data": {
+        "name": "End Call",
+        "is_end": true,
+        "prompt": "NODE 2 \u2014 End Call\n\nCall over. Do not speak.",
+        "allow_interrupt": false,
+        "add_global_prompt": false,
+        "extraction_enabled": false,
+        "extraction_prompt": "",
+        "extraction_variables": [],
+        "tool_uuids": []
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "1-2",
+      "source": "1",
+      "target": "2",
+      "type": "custom",
+      "animated": true,
+      "data": {
+        "condition": "Caller says goodbye, thank you, or indicates they want to hang up.",
+        "label": "End Call"
+      }
+    }
+  ],
+  "start_node_id": "1"
+}

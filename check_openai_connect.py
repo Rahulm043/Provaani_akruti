@@ -1,0 +1,10 @@
+import subprocess
+
+cmd = [
+    "gcloud", "compute", "ssh", "instance-20260815-072654",
+    "--zone=asia-south2-b",
+    "--project=project-cb090c10-8c6d-44c8-bbb",
+    "--command=sudo docker exec provaani_akruti-api-1 python -c \"with open('/opt/venv/lib/python3.13/site-packages/pipecat/services/openai/realtime/llm.py') as f: text = f.read(); idx = text.find('async def _connect'); print(text[idx:idx+2000])\""
+]
+proc = subprocess.run(cmd, capture_output=True, text=True, errors="replace", shell=True)
+print("Output:\n", proc.stdout)

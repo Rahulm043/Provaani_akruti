@@ -51,7 +51,12 @@ from pipecat.services.fish.tts import FishAudioTTSService, FishAudioTTSSettings
 from pipecat.services.gladia.stt import GladiaSTTService, GladiaSTTSettings
 from pipecat.services.google.llm import GoogleLLMService, GoogleLLMSettings
 from pipecat.services.google.stt import GoogleSTTService, GoogleSTTSettings
-from pipecat.services.google.tts import GoogleTTSService, GoogleTTSSettings
+from pipecat.services.google.tts import (
+    GeminiTTSService,
+    GeminiTTSSettings,
+    GoogleTTSService,
+    GoogleTTSSettings,
+)
 from pipecat.services.google.vertex.llm import (
     GoogleVertexLLMService,
     GoogleVertexLLMSettings,
@@ -533,13 +538,35 @@ def create_tts_service(
             silence_time_s=1.0,
             **kwargs,
         )
-    elif user_config.tts.provider == ServiceProviders.GOOGLE.value:
+    elif user_config.tts.provider in (ServiceProviders.GOOGLE.value, "gemini"):
         model = getattr(user_config.tts, "model", None) or "chirp_3_hd"
         language = getattr(user_config.tts, "language", None) or "en-US"
         voice = getattr(user_config.tts, "voice", None) or "en-US-Chirp3-HD-Charon"
         speed = getattr(user_config.tts, "speed", None)
         location = getattr(user_config.tts, "location", None) or None
         credentials = getattr(user_config.tts, "credentials", None)
+        api_key = getattr(user_config.tts, "api_key", None)
+        if isinstance(api_key, list):
+            api_key = api_key[0] if api_key else None
+        api_key = api_key or os.environ.get("Google_ai_studio") or os.environ.get("GOOGLE_API_KEY")
+
+        if model and ("gemini" in model.lower() or (api_key and not credentials)):
+            actual_voice = voice if (voice and voice != "en-US-Chirp3-HD-Charon") else "Aoede"
+            settings = GeminiTTSService.Settings(
+                model=model,
+                voice=actual_voice,
+                language=language,
+            )
+            return GeminiTTSService(
+                api_key=api_key,
+                credentials=credentials,
+                location=location,
+                sample_rate=24000,
+                settings=settings,
+                text_filters=[xml_function_tag_filter],
+                skip_aggregator_types=["recording_router", "recording"],
+                silence_time_s=1.0,
+            )
 
         settings_kwargs = {
             "model": model,

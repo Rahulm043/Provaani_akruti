@@ -13,7 +13,6 @@ const NAV_ITEMS = [
   { path: '/', icon: Bot, label: 'Call Logs' },
   { path: '/usage', icon: BarChart3, label: 'Usage' },
   { path: '/clinic-details', icon: Building2, label: 'Clinic Details' },
-  { path: '/appointments', icon: CalendarClock, label: 'Appointments' },
 ];
 
 function MobileTopHeader({ onLogout }) {
@@ -128,7 +127,7 @@ function AppContent() {
           <Route path="/" element={<Dashboard />} />
           <Route path="/usage" element={<Usage />} />
           <Route path="/clinic-details" element={<ClinicDetails />} />
-          <Route path="/appointments" element={<Appointments />} />
+          <Route path="/appointments" element={<Navigate to="/clinic-details" replace />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>

@@ -18,7 +18,10 @@ from google.genai import types
 from whatsapp_service import (
     send_whatsapp_clinic_details,
     send_whatsapp_appointment_confirmation,
-    send_whatsapp_appointment_details
+    send_whatsapp_appointment_details,
+    send_whatsapp_clinic_and_appointment_details,
+    TIMINGS_STATE,
+    save_timings_state
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -250,6 +253,9 @@ async def main():
         if not phone_number:
             return web.json_response({"status": "error", "message": "phone_number is required"}, status=400)
 
+        durgapur_timings = data.get("durgapur_timings")
+        burdwan_timings = data.get("burdwan_timings")
+
         if template_type == "appointment_confirmation" or (appointment_datetime and caller_name):
             res = await send_whatsapp_appointment_confirmation(
                 phone_number=phone_number,
@@ -260,16 +266,38 @@ async def main():
         elif template_type == "appointment_details":
             res = await send_whatsapp_appointment_details(
                 phone_number=phone_number,
-                branch_id_or_name=branch
+                branch_id_or_name=branch,
+                durgapur_timings=durgapur_timings,
+                burdwan_timings=burdwan_timings
             )
         else:
             procedure = data.get("procedure_of_interest") or data.get("procedure")
             res = await send_whatsapp_clinic_details(
                 phone_number=phone_number,
                 caller_name=caller_name,
-                procedure_of_interest=procedure
+                procedure_of_interest=procedure,
+                durgapur_timings=durgapur_timings,
+                burdwan_timings=burdwan_timings
             )
         return web.json_response(res)
+
+    async def handle_update_timings(request):
+        try:
+            payload = await request.json()
+            if isinstance(payload, dict):
+                for k, v in payload.items():
+                    if v and isinstance(v, str):
+                        TIMINGS_STATE[k] = v.strip()
+                save_timings_state(TIMINGS_STATE)
+                logger.info(f"Updated WhatsApp timings state: {TIMINGS_STATE}")
+                return web.json_response({"status": "ok", "timings": TIMINGS_STATE})
+            return web.json_response({"error": "Invalid payload, dictionary expected"}, status=400)
+        except Exception as e:
+            logger.error(f"Error updating timings state: {e}")
+            return web.json_response({"error": str(e)}, status=400)
+
+    async def handle_get_timings(request):
+        return web.json_response({"status": "ok", "timings": TIMINGS_STATE})
 
     async def handle_analyze(request):
         try:
@@ -317,6 +345,8 @@ async def main():
     app.add_routes(
         [
             web.post("/send-whatsapp", handle_send_whatsapp),
+            web.post("/update-timings", handle_update_timings),
+            web.get("/timings", handle_get_timings),
             web.post("/analyze/{run_id}", handle_analyze),
             web.get("/analyze/{run_id}", handle_get_analysis),
             web.get("/analyze", handle_list_analyses),

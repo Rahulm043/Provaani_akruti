@@ -26,7 +26,7 @@ def main():
     clip_size = os.path.getsize(clip_path)
     print(f"Extracted clip {clip_path}: {clip_size} bytes (duration ~42s)")
 
-    api_key = os.environ.get("SMALLEST_API_KEY", "sk_1a31ac802c8823395b7fbfa5b863bd68")
+    api_key = os.environ.get("SMALLEST_API_KEY", "SMALLEST_AI_KEY_PLACEHOLDER")
     
     # Try sending to Smallest AI STT endpoint
     try:

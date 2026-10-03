@@ -517,6 +517,7 @@ from sqlalchemy import text
 from api.services.prompt_compiler import (
     DEFAULT_CLINIC_SETTINGS,
     compile_unified_prompt,
+    format_schedule_for_template,
 )
 
 CLINIC_SETTINGS_KEY = "clinic_settings"
@@ -662,7 +663,18 @@ async def update_clinic_settings(
     is_timings_enabled = bool(settings_dict.get("appointment_config", {}).get("enabled", False))
     is_booking_enabled = is_timings_enabled and bool(settings_dict.get("appointment_config", {}).get("allow_booking", True))
 
-    # 1. Persist to organization_configurations
+    # 1. Compute standardized human-readable timings for WhatsApp template
+    schedules = settings_dict.get("appointment_config", {}).get("schedule", {})
+    formatted_branch_timings = {}
+    for b in settings_dict.get("branches", []):
+        b_id = b.get("id")
+        if b_id:
+            sched = schedules.get(b_id, {})
+            formatted_branch_timings[b_id] = format_schedule_for_template(sched)
+
+    settings_dict["formatted_branch_timings"] = formatted_branch_timings
+
+    # 2. Persist to organization_configurations
     async with db_client.async_session() as session:
         await session.execute(
             text("""
@@ -673,27 +685,47 @@ async def update_clinic_settings(
             """),
             {"org_id": org_id, "key": CLINIC_SETTINGS_KEY, "val": json.dumps(settings_dict)},
         )
+        await session.execute(
+            text("""
+                INSERT INTO organization_configurations (organization_id, key, value, created_at, updated_at)
+                VALUES (:org_id, 'clinic_formatted_timings', :val, NOW(), NOW())
+                ON CONFLICT (organization_id, key) DO UPDATE
+                SET value = :val, updated_at = NOW();
+            """),
+            {"org_id": org_id, "val": json.dumps(formatted_branch_timings)},
+        )
         await session.commit()
 
-    # 2. Compile updated clinic-agnostic voice agent prompt
+    # 3. Synchronize timings state with analysis-service for WhatsApp dispatch
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as http_client:
+            await http_client.post(
+                "http://dograhtest-analysis:8001/update-timings",
+                json=formatted_branch_timings
+            )
+    except Exception as e:
+        logger.warning(f"Could not push updated timings to analysis-service: {e}")
+
+    # 4. Compile updated clinic-agnostic voice agent prompt
     new_prompt = compile_unified_prompt(settings_dict)
 
-    # 3. Update published workflow definition in PostgreSQL (prompt + tool gating)
+    # 3. Update all published workflow definitions and workflows in PostgreSQL
     async with db_client.async_session() as session:
+        # Fetch target workflow_definitions
         res = await session.execute(
             text("""
-                SELECT wd.id, wd.workflow_json 
+                SELECT wd.id, wd.workflow_id, wd.workflow_json 
                 FROM workflow_definitions wd
                 JOIN workflows w ON wd.workflow_id = w.id
-                WHERE (w.organization_id = :org_id OR :org_id IS NULL OR w.id = 1)
-                  AND wd.status = 'published'
-                ORDER BY wd.id DESC LIMIT 1;
+                WHERE (w.organization_id = :org_id OR :org_id IS NULL OR w.id IN (1, 4))
+                  AND wd.status = 'published';
             """),
             {"org_id": org_id},
         )
-        row = res.first()
-        if row:
+        rows = res.fetchall()
+        for row in rows:
             def_id = row.id
+            wf_id = row.workflow_id
             wf_json = row.workflow_json
             if isinstance(wf_json, str):
                 wf_json = json.loads(wf_json)
@@ -701,43 +733,32 @@ async def update_clinic_settings(
             nodes = wf_json.get("nodes", [])
             for node in nodes:
                 node_data = node.get("data", {})
-                if node.get("type") in ("startCall", "agentNode") or node_data.get("is_start"):
+                if node.get("type") in ("startCall", "agentNode") or node_data.get("is_start") or node.get("id") == "1":
                     node["data"]["prompt"] = new_prompt
-                    
-                    # Tool schema gating: Level 1 master toggle
                     tools = list(node_data.get("tool_uuids") or [])
-                    if is_booking_enabled:
-                        if BOOK_APPOINTMENT_TOOL_UUID not in tools:
-                            tools.append(BOOK_APPOINTMENT_TOOL_UUID)
-                    else:
-                        tools = [t for t in tools if t != BOOK_APPOINTMENT_TOOL_UUID]
+                    # In Phase 1, booking is disabled over phone
+                    tools = [t for t in tools if t != BOOK_APPOINTMENT_TOOL_UUID]
                     node["data"]["tool_uuids"] = tools
-                    break
-            else:
-                if nodes and "data" in nodes[0]:
-                    nodes[0]["data"]["prompt"] = new_prompt
-                    tools = list(nodes[0]["data"].get("tool_uuids") or [])
-                    if is_booking_enabled:
-                        if BOOK_APPOINTMENT_TOOL_UUID not in tools:
-                            tools.append(BOOK_APPOINTMENT_TOOL_UUID)
-                    else:
-                        tools = [t for t in tools if t != BOOK_APPOINTMENT_TOOL_UUID]
-                    nodes[0]["data"]["tool_uuids"] = tools
 
+            # Update workflow_definitions
             await session.execute(
-                text("""
-                    UPDATE workflow_definitions
-                    SET workflow_json = :data
-                    WHERE id = :id;
-                """),
+                text("UPDATE workflow_definitions SET workflow_json = :data WHERE id = :id;"),
                 {"data": json.dumps(wf_json), "id": def_id},
             )
-            await session.commit()
+
+            # Update workflows table
+            await session.execute(
+                text("UPDATE workflows SET workflow_definition = :data WHERE id = :id;"),
+                {"data": json.dumps(wf_json), "id": wf_id},
+            )
+
+        await session.commit()
 
     return {
         "success": True,
-        "message": "Clinic settings saved, voice agent prompt updated, and booking tools synced successfully",
+        "message": "Clinic settings saved, voice agent prompt updated, and WhatsApp timings synced successfully",
         "settings": settings_dict,
+        "formatted_branch_timings": formatted_branch_timings,
     }
 
 

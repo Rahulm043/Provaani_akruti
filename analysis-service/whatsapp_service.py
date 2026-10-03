@@ -6,6 +6,7 @@ Supports:
 3. 'appointment_details' - Dynamic branch consultation hours & address (falls back to clinic_details if template not yet created).
 """
 
+import json
 import logging
 import os
 import re
@@ -17,6 +18,35 @@ WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v21.0")
 WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", os.getenv("FB_WHATSAPP_ACCESS_TOKEN_2", ""))
 WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "1409910712203417")
 WHATSAPP_TEMPLATE_LANG = os.getenv("WHATSAPP_TEMPLATE_LANG", "en")
+
+# Persistent storage file for WhatsApp timing state
+TIMINGS_STATE_FILE = os.getenv("TIMINGS_STATE_PATH", "/data/timings_state.json")
+
+DEFAULT_TIMINGS = {
+    "durgapur": "Monday to Friday: 9:00 AM to 7:00 PM",
+    "burdwan": "Thursday: 2:00 PM to 6:00 PM; Friday: 9:00 AM to 7:00 PM; Saturday: 11:00 AM to 3:00 PM",
+}
+
+def load_timings_state() -> dict:
+    if os.path.exists(TIMINGS_STATE_FILE):
+        try:
+            with open(TIMINGS_STATE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    return {**DEFAULT_TIMINGS, **data}
+        except Exception as e:
+            logger.warning(f"Failed to read {TIMINGS_STATE_FILE}: {e}")
+    return dict(DEFAULT_TIMINGS)
+
+def save_timings_state(timings: dict):
+    try:
+        os.makedirs(os.path.dirname(TIMINGS_STATE_FILE) or ".", exist_ok=True)
+        with open(TIMINGS_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(timings, f, indent=2)
+    except Exception as e:
+        logger.warning(f"Failed to write {TIMINGS_STATE_FILE}: {e}")
+
+TIMINGS_STATE = load_timings_state()
 
 # Clinic Branch Registry
 CLINIC_BRANCHES = {
@@ -31,6 +61,7 @@ CLINIC_BRANCHES = {
         "hours": "Mon–Fri: 9:00 AM – 7:00 PM"
     }
 }
+
 
 
 def normalize_phone_number(phone: str) -> str:
@@ -134,17 +165,59 @@ async def send_whatsapp_template(
         }
 
 
+async def send_whatsapp_clinic_and_appointment_details(
+    phone_number: str,
+    durgapur_timings: str = None,
+    burdwan_timings: str = None
+) -> dict:
+    """
+    Sends 'clinic_and_appointment_details' template using the latest persisted/state timings:
+    Named Parameters:
+    - durgapur_timings: Consultation hours for Durgapur Clinic
+    - burdwan_timings: Consultation hours for Burdwan Clinic
+    """
+    d_timing = (durgapur_timings or TIMINGS_STATE.get("durgapur") or DEFAULT_TIMINGS["durgapur"]).strip()
+    b_timing = (burdwan_timings or TIMINGS_STATE.get("burdwan") or DEFAULT_TIMINGS["burdwan"]).strip()
+
+    components = [
+        {
+            "type": "body",
+            "parameters": [
+                {
+                    "type": "text",
+                    "parameter_name": "durgapur_timings",
+                    "text": d_timing
+                },
+                {
+                    "type": "text",
+                    "parameter_name": "burdwan_timings",
+                    "text": b_timing
+                }
+            ]
+        }
+    ]
+
+    return await send_whatsapp_template(
+        phone_number=phone_number,
+        template_name="clinic_and_appointment_details",
+        components=components
+    )
+
+
 async def send_whatsapp_clinic_details(
     phone_number: str,
     caller_name: str = None,
-    procedure_of_interest: str = None
+    procedure_of_interest: str = None,
+    **kwargs
 ) -> dict:
     """
-    Sends static 'clinic_details' template.
+    Sends official 'clinic_and_appointment_details' template containing clinic addresses,
+    doctor info, and latest consultation timings for both branches.
     """
-    return await send_whatsapp_template(
+    return await send_whatsapp_clinic_and_appointment_details(
         phone_number=phone_number,
-        template_name="clinic_details"
+        durgapur_timings=kwargs.get("durgapur_timings"),
+        burdwan_timings=kwargs.get("burdwan_timings")
     )
 
 
@@ -195,11 +268,15 @@ async def send_whatsapp_appointment_confirmation(
 
 async def send_whatsapp_appointment_details(
     phone_number: str,
-    branch_id_or_name: str = None
+    branch_id_or_name: str = None,
+    **kwargs
 ) -> dict:
     """
-    Sends branch appointment/consultation details.
-    Falls back gracefully to clinic_details until a dedicated appointment_details template is approved.
+    Sends clinic consultation schedule via 'clinic_and_appointment_details' template.
     """
-    return await send_whatsapp_clinic_details(phone_number=phone_number)
+    return await send_whatsapp_clinic_and_appointment_details(
+        phone_number=phone_number,
+        durgapur_timings=kwargs.get("durgapur_timings"),
+        burdwan_timings=kwargs.get("burdwan_timings")
+    )
 
