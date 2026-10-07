@@ -29,3 +29,14 @@ __pycache__/
 __pycache__/
 .ruff_cache/
 .ruff_cache
+
+# Scratch & Debug logs/scripts
+scratch/
+*.log
+*.txt
+!current_prompt.txt
+*.json
+!custom-ui/package.json
+!custom-ui/package-lock.json
+!package.json
+!package-lock.json

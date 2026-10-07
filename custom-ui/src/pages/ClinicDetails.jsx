@@ -695,7 +695,7 @@ export default function ClinicDetails() {
                 </div>
               </div>
 
-              {/* WhatsApp Template Output Preview */}
+              {/* WhatsApp Message Preview */}
               <div style={{
                 background: 'rgba(34, 197, 94, 0.05)',
                 border: '1px solid rgba(34, 197, 94, 0.25)',
@@ -706,10 +706,10 @@ export default function ClinicDetails() {
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, fontSize: '13px', color: '#16a34a' }}>
                     <Sparkles size={15} />
-                    <span>WhatsApp Template Active Hours (clinic_and_appointment_details)</span>
+                    <span>WhatsApp Consultation Hours Preview</span>
                   </div>
                   <span style={{ fontSize: '11px', background: 'rgba(34, 197, 94, 0.15)', color: '#15803d', padding: '2px 8px', borderRadius: '10px', fontWeight: 500 }}>
-                    Auto-Formatted on Save
+                    Active WhatsApp Schedule
                   </span>
                 </div>
                 <div style={{ fontSize: '12px', color: '#475569', lineHeight: 1.6 }}>

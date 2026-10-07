@@ -113,6 +113,17 @@ function formatDateTimeShort(iso) {
   });
 }
 
+function formatDisposition(rawDisp) {
+  if (!rawDisp) return 'Completed';
+  const d = String(rawDisp).toLowerCase();
+  if (d.includes('end_call') || d.includes('normal_clearing')) return 'Completed';
+  if (d.includes('user_hangup') || d.includes('hangup')) return 'Caller Ended Call';
+  if (d.includes('idle') || d.includes('timeout') || d.includes('duration_exceeded')) return 'Timed Out';
+  if (d.includes('qualified')) return 'Inquiry Handled';
+  if (d.includes('failed') || d.includes('error')) return 'Incomplete';
+  return rawDisp.replace(/_/g, ' ');
+}
+
 
 // In-memory transcript cache to prevent duplicate fetches on re-expanding rows
 const transcriptCache = new Map();
@@ -256,10 +267,13 @@ function InlineCallDetail({ run }) {
 
   // Extract quality metrics & metadata from logs and gathered context
   const qualityMetrics = useMemo(() => {
+    const rawLang = gathered.preferred_language || extracted.preferred_language || 'Bengali';
+    const rawProc = gathered.procedure_of_interest || extracted.procedure_of_interest || 'General Consultation';
+    const whatsappRequested = (gathered.whatsapp_confirmed || gathered.should_send_whatsapp || extracted.whatsapp_confirmed) ? 'Sent' : 'Requested';
     return {
-      language: gathered.preferred_language || extracted.preferred_language || 'Bengali',
-      procedure: gathered.procedure_of_interest || extracted.procedure_of_interest || 'Hair transplant',
-      booking: (gathered.booking_requested || extracted.booking_requested) ? 'Yes' : 'No',
+      language: rawLang,
+      procedure: rawProc,
+      whatsapp: whatsappRequested,
     };
   }, [gathered, extracted]);
 
@@ -325,19 +339,19 @@ function InlineCallDetail({ run }) {
         </div>
       </div>
 
-      {/* Row 2: Ultra-Compact Metadata Row (Language, Procedure, Booking) */}
+      {/* Row 2: Ultra-Compact Metadata Row (Language, Procedure, WhatsApp Details) */}
       <div className="compact-meta-row">
         <span className="compact-meta-chip lang">
           <span className="meta-label">Language:</span>
           <span className="meta-val">{qualityMetrics.language}</span>
         </span>
         <span className="compact-meta-chip proc">
-          <span className="meta-label">Procedure:</span>
+          <span className="meta-label">Inquiry:</span>
           <span className="meta-val">{qualityMetrics.procedure}</span>
         </span>
         <span className="compact-meta-chip booking">
-          <span className="meta-label">Booking:</span>
-          <span className="meta-val">{qualityMetrics.booking}</span>
+          <span className="meta-label">WhatsApp Details:</span>
+          <span className="meta-val">{qualityMetrics.whatsapp}</span>
         </span>
       </div>
 
@@ -587,16 +601,16 @@ export default function Dashboard() {
         <div className="filter-controls-row" style={{ margin: 0 }}>
           <select
             className="filter-select"
-            aria-label="Filter calls by status"
+            aria-label="Filter calls by outcome"
             value={statusFilter}
             onChange={e => { setStatusFilter(e.target.value); setCurrentPage(1); }}
           >
-            <option value="all">All Status</option>
+            <option value="all">All Outcomes</option>
             <option value="completed">Completed</option>
-            <option value="hangup">User Hangup</option>
-            <option value="qualified">Qualified</option>
-            <option value="failed">Failed</option>
-            <option value="error">Error</option>
+            <option value="hangup">Caller Ended Call</option>
+            <option value="qualified">Inquiry Handled</option>
+            <option value="failed">Incomplete</option>
+            <option value="error">Timed Out</option>
           </select>
           <div className="search-input-group" style={{ width: 280, flex: 'none' }}>
             <Search size={14} aria-hidden="true" className="search-input-icon" />
@@ -631,7 +645,7 @@ export default function Dashboard() {
                 <tr>
                   <th style={{ width: 36 }} aria-label="Expand indicator"></th>
                   <th>Phone</th>
-                  <th>End reason</th>
+                  <th>Outcome</th>
                   <th>Duration</th>
                   <th>Status</th>
                   <th>Time</th>
@@ -641,7 +655,7 @@ export default function Dashboard() {
                 {paginatedRuns.map(run => {
                   const isExpanded = expandedRunId === run.id;
                   const phone = getCustomerPhone(run);
-                  const disp = (run.gathered_context?.call_disposition || 'completed').replace(/_/g, ' ');
+                  const disp = formatDisposition(run.gathered_context?.call_disposition);
                   const dur = formatDuration(getRunDuration(run));
 
                   return (
@@ -699,7 +713,7 @@ export default function Dashboard() {
             {paginatedRuns.map(run => {
               const isExpanded = expandedRunId === run.id;
               const phone = getCustomerPhone(run);
-              const disp = (run.gathered_context?.call_disposition || 'completed').replace(/_/g, ' ');
+              const disp = formatDisposition(run.gathered_context?.call_disposition);
               const dur = formatDuration(getRunDuration(run));
               const timeStr = formatDateTimeShort(run.created_at);
 

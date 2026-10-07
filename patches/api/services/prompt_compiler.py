@@ -4,6 +4,8 @@ Programmatically compiles ground truth clinic information, branch schedules,
 and receptionist guidelines into a compact, low-latency voice agent prompt.
 """
 
+from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Optional
 
 DEFAULT_BRANCH_SCHEDULE = {
@@ -42,11 +44,265 @@ DEFAULT_CLINIC_SETTINGS: Dict[str, Any] = {
         "enabled": True,
         "allow_booking": False,
         "schedule": {
-            "durgapur": DEFAULT_BRANCH_SCHEDULE,
-            "burdwan": DEFAULT_BRANCH_SCHEDULE,
+            "durgapur": {
+                "monday": [{"start": "09:00", "end": "19:00"}],
+                "tuesday": [{"start": "09:00", "end": "19:00"}],
+                "wednesday": [{"start": "09:00", "end": "19:00"}],
+                "thursday": [{"start": "09:00", "end": "19:00"}],
+                "friday": [{"start": "09:00", "end": "19:00"}],
+                "saturday": [],
+                "sunday": [],
+            },
+            "burdwan": {
+                "monday": [],
+                "tuesday": [],
+                "wednesday": [],
+                "thursday": [{"start": "14:00", "end": "18:00"}],
+                "friday": [{"start": "09:00", "end": "19:00"}],
+                "saturday": [{"start": "11:00", "end": "15:00"}],
+                "sunday": [],
+            },
         },
     },
 }
+
+_CACHED_CLINIC_SETTINGS: Optional[Dict[str, Any]] = None
+
+def get_cached_clinic_settings() -> Dict[str, Any]:
+    """Retrieve in-memory cached clinic settings or return defaults."""
+    global _CACHED_CLINIC_SETTINGS
+    if _CACHED_CLINIC_SETTINGS is not None:
+        return _CACHED_CLINIC_SETTINGS
+    return DEFAULT_CLINIC_SETTINGS
+
+def set_cached_clinic_settings(settings: Dict[str, Any]) -> None:
+    """Update in-memory cached clinic settings whenever modified via UI / API."""
+    global _CACHED_CLINIC_SETTINGS
+    if isinstance(settings, dict):
+        _CACHED_CLINIC_SETTINGS = settings
+
+HI_DAYS = ["सोमवार", "मंगलवार", "बुधवार", "गुरुवार", "शुक्रवार", "शनिवार", "रविवार"]
+BN_DAYS = ["সোমবার", "মঙ্গলবার", "বুধবার", "বৃহস্পতিবার", "শুক্রবার", "শনিবার", "রবিবার"]
+
+def _branch_name_hi(name: str) -> str:
+    if "durgapur" in name.lower():
+        return "दुर्गापुर क्लिनिक"
+    if "burdwan" in name.lower():
+        return "बर्धमान क्लिनिक"
+    return name
+
+def _branch_loc_hi(name: str) -> str:
+    if "durgapur" in name.lower():
+        return "दुर्गापुर क्लिनिक में"
+    if "burdwan" in name.lower():
+        return "बर्धमान क्लिनिक में"
+    return f"{name} में"
+
+def _branch_name_bn(name: str) -> str:
+    if "durgapur" in name.lower():
+        return "দুর্গাপুর ক্লিনিক"
+    if "burdwan" in name.lower():
+        return "বর্ধমান ক্লিনিক"
+    return name
+
+def _branch_loc_bn(name: str) -> str:
+    if "durgapur" in name.lower():
+        return "দুর্গাপুর ক্লিনিকে"
+    if "burdwan" in name.lower():
+        return "বর্ধমান ক্লিনিকে"
+    return f"{name}-এ"
+
+def _format_time_natural_hi(t: dtime) -> str:
+    h = t.hour
+    m = t.minute
+    h12 = h % 12 or 12
+    period = "सुबह" if h < 12 else ("दोपहर" if h < 16 else "शाम")
+    if m == 0:
+        return f"{period} {h12} बजे"
+    return f"{period} {h12}:{m:02d} बजे"
+
+def _format_time_natural_bn(t: dtime) -> str:
+    h = t.hour
+    m = t.minute
+    h12 = h % 12 or 12
+    period = "সকাল" if h < 12 else ("দুপুর" if h < 16 else "সন্ধ্যা")
+    bn_digits = {"0": "০", "1": "১", "2": "২", "3": "৩", "4": "৪", "5": "৫", "6": "৬", "7": "৭", "8": "৮", "9": "৯"}
+    h12_bn = "".join(bn_digits.get(d, d) for d in str(h12))
+    if m == 0:
+        return f"{period} {h12_bn} টা"
+    m_bn = "".join(bn_digits.get(d, d) for d in f"{m:02d}")
+DAY_KEYS = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+DAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+def _parse_time_str(t_str: str) -> Optional[dtime]:
+    if not t_str or not isinstance(t_str, str):
+        return None
+    try:
+        parts = t_str.strip().split(":")
+        h = int(parts[0])
+        m = int(parts[1]) if len(parts) > 1 else 0
+        return dtime(h, m)
+    except Exception:
+        return None
+
+def compute_live_clinic_state_from_settings(
+    settings: Optional[Dict[str, Any]] = None,
+    now: Optional[datetime] = None
+) -> str:
+    """Procedurally calculate live clinic status and availability briefing from settings."""
+    if settings is None:
+        settings = get_cached_clinic_settings()
+
+    if now is None:
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+
+    current_day_idx = now.weekday()
+    current_day_name = DAY_NAMES[current_day_idx]
+    current_date_str = now.strftime("%B %d, %Y")
+    current_time_str = now.strftime("%I:%M %p")
+    now_time = now.time()
+
+    doctor_name = settings.get("doctor_name", "Doctor Anand").strip()
+    doc_display = "Doctor Anand" if "Anand" in doctor_name else doctor_name
+
+    branches = settings.get("branches", [])
+    appt_cfg = settings.get("appointment_config", {})
+    schedules = appt_cfg.get("schedule", {}) if isinstance(appt_cfg, dict) else {}
+
+    parsed_schedules = {}
+    for b in branches:
+        b_id = b.get("id")
+        b_name = b.get("name", "Clinic").strip()
+        b_sched = schedules.get(b_id, {})
+        day_map = {}
+        for idx, day_k in enumerate(DAY_KEYS):
+            slots = b_sched.get(day_k, [])
+            valid_slots = []
+            if isinstance(slots, list):
+                for s in slots:
+                    if isinstance(s, dict):
+                        st = _parse_time_str(s.get("start", ""))
+                        et = _parse_time_str(s.get("end", ""))
+                        if st and et and st < et:
+                            valid_slots.append((st, et))
+            day_map[idx] = valid_slots
+        parsed_schedules[b_name] = day_map
+
+    open_now_branches = []
+    upcoming_today_branches = []
+    closed_today_branches = []
+
+    for b_name, day_map in parsed_schedules.items():
+        slots = day_map.get(current_day_idx, [])
+        for start, end in slots:
+            if start <= now_time < end:
+                open_now_branches.append((b_name, start, end))
+            elif now_time < start:
+                upcoming_today_branches.append((b_name, start, end))
+            else:
+                closed_today_branches.append((b_name, start, end))
+
+    if open_now_branches:
+        status_line = "OPEN NOW (" + "; ".join(f"{b} until {_format_time_natural_dt(end)}" for b, _, end in open_now_branches) + ")"
+        b_name, _, end_t = open_now_branches[0]
+        immediate_answer_en = f"{doc_display} is available right now today at {b_name} until {_format_time_natural_dt(end_t)}."
+        immediate_answer_hi = f"डॉक्टर आनंद आज {_branch_loc_hi(b_name)} {_format_time_natural_hi(end_t)} तक उपलब्ध हैं।"
+        immediate_answer_bn = f"ডাক্তার আনন্দ আজ {_branch_loc_bn(b_name)} {_format_time_natural_bn(end_t)} পর্যন্ত উপলব্ধ আছেন।"
+    elif upcoming_today_branches:
+        b_name, start_t, end_t = upcoming_today_branches[0]
+        status_line = f"OPENS TODAY at {_format_time_natural_dt(start_t)} ({b_name})"
+        immediate_answer_en = f"{doc_display} will be available today at {b_name} from {_format_time_natural_dt(start_t)} to {_format_time_natural_dt(end_t)}."
+        immediate_answer_hi = f"डॉक्टर आनंद आज {_branch_loc_hi(b_name)} {_format_time_natural_hi(start_t)} से {_format_time_natural_hi(end_t)} तक उपलब्ध रहेंगे।"
+        immediate_answer_bn = f"ডাক্তার আনন্দ আজ {_branch_loc_bn(b_name)} {_format_time_natural_bn(start_t)} থেকে {_format_time_natural_bn(end_t)} পর্যন্ত উপলব্ধ থাকবেন।"
+    else:
+        next_slot_info = None
+        for days_ahead in range(1, 8):
+            next_day_idx = (current_day_idx + days_ahead) % 7
+            next_day_name = DAY_NAMES[next_day_idx]
+            for b_name, day_map in parsed_schedules.items():
+                slots = day_map.get(next_day_idx, [])
+                if slots:
+                    start_t, end_t = slots[0]
+                    next_slot_info = (next_day_name, next_day_idx, days_ahead, b_name, start_t, end_t)
+                    break
+            if next_slot_info:
+                break
+
+        if closed_today_branches:
+            latest_end = max(end for _, _, end in closed_today_branches)
+            status_line = f"CLOSED FOR TODAY (Closed at {_format_time_natural_dt(latest_end)})"
+        else:
+            status_line = f"CLOSED TODAY ({current_day_name})"
+
+        if next_slot_info:
+            n_day, n_idx, days_ahead, n_branch, n_start, n_end = next_slot_info
+            day_ref_en = "tomorrow" if days_ahead == 1 else f"this coming {n_day}"
+            day_ref_hi = "कल" if days_ahead == 1 else f"अगले {HI_DAYS[n_idx]} को"
+            day_ref_bn = "আগামীকাল" if days_ahead == 1 else f"আগামী {BN_DAYS[n_idx]}"
+            immediate_answer_en = f"The clinic is currently closed. {doc_display} will next be available {day_ref_en} ({n_day}) from {_format_time_natural_dt(n_start)} to {_format_time_natural_dt(n_end)} at {n_branch}."
+            immediate_answer_hi = f"क्लिनिक अभी बंद है। डॉक्टर आनंद {day_ref_hi} {_branch_loc_hi(n_branch)} {_format_time_natural_hi(n_start)} से {_format_time_natural_hi(n_end)} तक उपलब्ध रहेंगे।"
+            immediate_answer_bn = f"ক্লিনিক এখন বন্ধ রয়েছে। ডাক্তার আনন্দ {day_ref_bn} {_branch_loc_bn(n_branch)} {_format_time_natural_bn(n_start)} থেকে {_format_time_natural_bn(n_end)} পর্যন্ত উপলব্ধ থাকবেন।"
+        else:
+            immediate_answer_en = "The clinic is currently closed. Please contact our reception desk."
+            immediate_answer_hi = "क्लिनिक अभी बंद है। कृपया हमारे रिसेप्शन डेस्क से संपर्क करें।"
+            immediate_answer_bn = "ক্লিনিক এখন বন্ধ রয়েছে। অনুগ্রহ করে আমাদের রিসেপশনে যোগাযোগ করুন।"
+
+    tomorrow_idx = (current_day_idx + 1) % 7
+    tomorrow_name = DAY_NAMES[tomorrow_idx]
+    tomorrow_open_en = []
+    tomorrow_open_hi = []
+    tomorrow_open_bn = []
+    for b_name, day_map in parsed_schedules.items():
+        slots = day_map.get(tomorrow_idx, [])
+        if slots:
+            slot_str_en = " & ".join(f"{_format_time_natural_dt(s)} to {_format_time_natural_dt(e)}" for s, e in slots)
+            tomorrow_open_en.append(f"{b_name}: {slot_str_en}")
+            slot_str_hi = " और ".join(f"{_format_time_natural_hi(s)} से {_format_time_natural_hi(e)}" for s, e in slots)
+            tomorrow_open_hi.append(f"{_branch_name_hi(b_name)}: {slot_str_hi}")
+            slot_str_bn = " এবং ".join(f"{_format_time_natural_bn(s)} থেকে {_format_time_natural_bn(e)}" for s, e in slots)
+            tomorrow_open_bn.append(f"{_branch_name_bn(b_name)}: {slot_str_bn}")
+
+    tomorrow_summary_en = "; ".join(tomorrow_open_en) if tomorrow_open_en else "Closed all day"
+    tomorrow_summary_hi = "; ".join(tomorrow_open_hi) if tomorrow_open_hi else "पूरे दिन बंद रहेगा"
+    tomorrow_summary_bn = "; ".join(tomorrow_open_bn) if tomorrow_open_bn else "সারা দিন বন্ধ থাকবে"
+
+    day_ref_lines = []
+    for d_idx, d_name in enumerate(DAY_NAMES):
+        day_branch_parts = []
+        for b_name, day_map in parsed_schedules.items():
+            slots = day_map.get(d_idx, [])
+            if slots:
+                slot_str = " & ".join(f"{_format_time_natural_dt(s)} to {_format_time_natural_dt(e)}" for s, e in slots)
+                day_branch_parts.append(f"{b_name} ({slot_str})")
+        if day_branch_parts:
+            day_ref_lines.append(f"  * {d_name} ({HI_DAYS[d_idx]} / {BN_DAYS[d_idx]}): " + " & ".join(day_branch_parts))
+        else:
+            day_ref_lines.append(f"  * {d_name} ({HI_DAYS[d_idx]} / {BN_DAYS[d_idx]}): Closed all day")
+
+    day_ref_str = "\n".join(day_ref_lines)
+
+    return (
+        "## LIVE CLINIC STATUS & DOCTOR AVAILABILITY (IST)\n"
+        f"- Live Timestamp: {current_day_name}, {current_date_str} at {current_time_str} IST\n"
+        f"- Current Operating Status: {status_line}\n"
+        "- DIRECT AVAILABILITY FACT (Read the exact sentence in caller's active language - NEVER switch to English on Hindi/Bengali calls):\n"
+        f"  * [Hindi]: \"{immediate_answer_hi}\"\n"
+        f"  * [Bengali]: \"{immediate_answer_bn}\"\n"
+        f"  * [English]: \"{immediate_answer_en}\"\n"
+        f"- Tomorrow's Availability ({tomorrow_name} / {HI_DAYS[tomorrow_idx]} / {BN_DAYS[tomorrow_idx]}):\n"
+        f"  * [Hindi]: \"{tomorrow_summary_hi}\"\n"
+        f"  * [Bengali]: \"{tomorrow_summary_bn}\"\n"
+        f"  * [English]: \"{tomorrow_summary_en}\"\n"
+        "- Day-Specific Reference (Use ONLY when caller explicitly asks about a specific day or branch):\n"
+        f"{day_ref_str}"
+    )
+
+def _format_time_natural_dt(t: dtime) -> str:
+    h = t.hour % 12 or 12
+    ampm = "AM" if t.hour < 12 else "PM"
+    if t.minute == 0:
+        return f"{h} {ampm}"
+    return f"{h}:{t.minute:02d} {ampm}"
 
 
 def _format_time_natural(t: str) -> str:
@@ -235,62 +491,81 @@ def compile_unified_prompt(settings: Optional[Dict[str, Any]] = None) -> str:
 
     branch_lines = []
     for b in branches:
-        b_id = b.get("id", "").strip()
         b_name = b.get("name", "Clinic").strip()
         b_addr = b.get("address", "").strip()
-        b_sched = schedules.get(b_id, {})
-        timing_str = format_branch_schedule(b_sched)
-        branch_lines.append(f"- {b_name}: {b_addr} | Hours: {timing_str}")
+        branch_lines.append(f"- {b_name}: {b_addr}")
 
-    branches_str = "\n".join(branch_lines) if branch_lines else f"- Operating Hours: Monday to Friday: 10 AM to 7 PM (Closed Weekends)"
+    branches_str = "\n".join(branch_lines) if branch_lines else "- Clinic Branches: Durgapur Clinic and Burdwan Clinic"
 
     prompt = f"""## IDENTITY, ROLE & TONE
-You are a warm, genuinely friendly, and eager front-desk receptionist at {clinic_name}.
+You are a warm, genuinely friendly, and attentive front-desk receptionist at {clinic_name}.
+- Natural Conversational Variety: Answer caller questions directly and naturally. NEVER repeat the same robotic opener (DO NOT start every reply with "हाँ बिल्कुल!", "অবশ্যই!", or "Certainly!"). Speak with natural variety.
 - Eager to Help: Show cheerful warmth and genuine enthusiasm to help callers explore their cosmetic and treatment questions. You love guiding patients!
 - Not an Appointment-Pusher: Do NOT rush or push callers to book an appointment. First happily answer their questions, explain what Doctor Anand offers, and make them feel supported.
-- Brevity Limit: Keep every reply to MAXIMUM 2 short sentences at a time. Sound lively, natural, and conversational without rambling.
+- Brevity Limit: Keep every reply to MAXIMUM 1 to 2 short sentences at a time. Sound lively, natural, and conversational without rambling.
 
 ## GREETING (Say verbatim on call start):
 "नमस्ते! Welcome to {clinic_name}. ... Aap kis language me baat karna prefer karenge? ... Hindi, Bengali, ya English?"
 
-## LANGUAGE LOCK (STRICT)
-Once the caller selects or speaks a language, LOCK into it for the ENTIRE rest of the call. Never switch or mix:
-- Bengali: Use 100% Bengali in Bangla script (বাংলা লিপি).
-- Hindi: Use natural conversational Hindi.
-- English: Use natural English.
+## LANGUAGE LOCK (ABSOLUTE & UNBREAKABLE)
+- Once the caller speaks or selects a language (Bengali, Hindi, or English), you MUST speak in that language for 100% of your responses throughout the entire call.
+- NEVER switch back to English when the caller is speaking Hindi or Bengali.
+- CRITICAL AVAILABILITY & TIMING RULE: When confirming consultation hours or availability, ALWAYS speak 100% in the caller's active language:
+  * On Hindi calls: Speak the Hindi availability line (e.g. "डॉक्टर आनंद आज दुर्गापुर क्लिनिक में सुबह 10 बजे से शाम 7 बजे तक उपलब्ध हैं।"). NEVER say "10 AM to 7 PM" or English phrases!
+  * On Bengali calls: Speak the Bengali availability line (e.g. "ডাক্তার আনন্দ আজ দুর্গাপুর ক্লিনিকে সকাল ১০ টা থেকে সন্ধ্যা ৭ টা পর্যন্ত উপলব্ধ আছেন।"). NEVER switch to English!
+  * On English calls: Speak natural English (e.g. "Doctor Anand is available today at Durgapur Clinic until 7 PM.").
+- Only switch languages if the caller explicitly asks or starts speaking in another language.
+- Bengali: 100% Bengali in Bangla script (বাংলা লিপি).
+- Hindi: 100% Hindi in Devanagari script (देवनागरी).
+- English: Natural English.
 
-## CLINIC GROUND TRUTH & OPERATING HOURS
+## CLINIC GROUND TRUTH & LOCATIONS
 - Clinic: {clinic_name}
 - Chief Surgeon: {doctor_name} ({doctor_credentials})
 - Reception: {reception} | Email: {email}
-- Branches & Operating Hours:
+- Clinic Locations:
 {branches_str}
 - Services: {procedures}
 
 ## PROCEDURES & CONSULTATIVE GUIDANCE
 - When a caller asks about a procedure or aesthetic goal, warmly reassure them that {doctor_name} has extensive experience performing it at {clinic_name}.
-- Ask a friendly, supportive question about their personal aesthetic goals to guide them, keeping within 2 sentences max.
+- Answer their specific query clearly and ask a friendly, supportive follow-up question, keeping within 2 sentences max.
 
-## APPOINTMENTS & TIMINGS POLICY (STRICT - NO PHONE BOOKINGS)
-- Operating Hours: Quote the exact branch timings above when callers ask when the clinic is open, when Doctor Anand is available, or when to visit.
-- No Booking Pushing: Never push or rush callers into scheduling. Only address booking when the caller explicitly asks how to visit or book.
-- Booking Policy: NEVER offer to book or schedule appointments over the phone yourself. Inform the caller politely that consultations with Doctor Anand are scheduled directly by calling our clinic reception desk, and offer to send the clinic details and reception numbers to their WhatsApp.
+## APPOINTMENTS & TIMINGS POLICY (USE LIVE AVAILABILITY SECTION)
+- Reference Live Availability: Always use the `## LIVE CLINIC STATUS & DOCTOR AVAILABILITY (IST)` section for doctor availability, current open status, and consultation hours.
+- Direct Fact Selection: Pick the exact pre-translated sentence for the caller's active language from `DIRECT AVAILABILITY FACT`.
+- Conversational Timings (DO NOT DUMP ENTIRE SCHEDULE):
+  - When asked when the doctor is available or about clinic hours: State the translated direct answer from the live availability section (1 short sentence).
+- Booking Policy (Strict - No Phone Bookings):
+  - NEVER book or schedule appointments over the phone yourself.
+  - Inform the caller politely that consultations with Doctor Anand are scheduled directly by calling our clinic reception desk, and offer to send clinic details and reception numbers to their WhatsApp.
 
-## WHATSAPP DISPATCH & DTMF KEYPAD
-- Proactively offer to send clinic details, address, and doctor profile to WhatsApp whenever the caller shows interest in a procedure, consultation, timings, or location.
-- Number Collection: Instruct caller to enter their 10-digit WhatsApp number on their phone dialpad (never speak it).
-- Trigger: When you receive `[Keypad Input Received: XXXXXXXXXX]`, IMMEDIATELY call `send_whatsapp(phone_number="XXXXXXXXXX", procedure_of_interest=...)` and confirm with 1 short sentence.
+## WHATSAPP DTMF NUMBER COLLECTION (STRICT 2 PHASES)
+Phase 1 - Request Keypad Entry:
+- Whenever you offer WhatsApp details or the caller agrees/asks to receive WhatsApp details (e.g., "Yes", "পাঠিয়ে দিন", "দেুম", "हाँ भेज दीजिए", "sure", "okay", "send it"):
+- You DO NOT have the number yet! DO NOT say "I noted your number" or "আমি নম্বর নিয়েছি".
+- You MUST explicitly ask them to type their 10-digit number on their phone keypad:
+  * Bengali: "অনুগ্রহ করে আপনার ফোনের কিপ্যাডে আপনার ১০ সংখ্যার হোয়াটসঅ্যাপ নম্বরটি টাইপ করুন।"
+  * Hindi: "कृपया अपने फोन के कीपैड पर अपना 10 अंकों का व्हाट्सएप नंबर टाइप करें।"
+  * English: "Please enter your 10-digit WhatsApp number on your phone keypad."
 
-## ENDING THE CALL (CRITICAL)
-Whenever the caller says goodbye, thank you, is done, is busy, called by mistake, or asks to hang up (e.g. 'bye', 'thank you', 'রেখে দিন', 'কাটছি', 'বিদায়', 'अलविदा', 'wrong number', 'busy'):
-You MUST call the `end_call` tool in that turn while speaking a brief 1-sentence polite farewell.
+Phase 2 - Confirmation After Digits:
+- ONLY AFTER you see `[Keypad Input Received: ...]` in the transcript or if the caller enters/speaks digits:
+- Confirm warmly in 1 short sentence:
+  * Bengali: "ধন্যবাদ! আমি এখনই হোয়াটসঅ্যাপে সমস্ত বিবরণ পাঠিয়ে দিচ্ছি।"
+  * Hindi: "धन्यवाद! मैं अभी व्हाट्सएप पर सभी विवरण भेज रही हूँ।"
+  * English: "Thank you! I am sending all the details to your WhatsApp right now."
+
+## ENDING THE CALL & IMMEDIATE HANGUP (CRITICAL)
+Whenever the caller says goodbye, thank you, thanks, is done, is busy, called by mistake, or indicates conclusion (e.g. 'থ্যাঙ্ক ইউ', 'thank you', 'thanks', 'ধন্যবাদ', 'ঠিক আছে থ্যাঙ্ক ইউ', 'bye', 'বিদায়', 'রেখে দিন', 'কাটছি', 'अलविदा', 'शुक्रिया', 'wrong number', 'busy'):
+You MUST IMMEDIATELY call the `end_call` tool to disconnect the phone call.
 
 ## GUARDRAILS
-- Clinic Domain Only: Strictly decline any non-clinic queries (general knowledge, coding, weather, politics).
-- Safety: Never prescribe medicines, diagnose, or guarantee surgical results. Recommend in-person consultation. Do not quote fixed surgical prices over the phone.
+- Clinic Domain Only: Strictly decline any non-clinic queries.
+- Safety: Never prescribe medicines or guarantee surgical results. Recommend in-person consultation.
 
 ## TTS RULES
 - ALWAYS write "Doctor" / "ডাক্তার" / "डॉक्टर" (never Dr. or ডা.).
-- Speak natural times: "10 AM to 7 PM", "সকাল ১০ টা থেকে সন্ধ্যা ৭ টা", "सुबह 10 बजे से शाम 7 बजे तक" (never 10:00 or colons)."""
+- Speak natural times in the active language: e.g., "সকাল ১০ টা থেকে সন্ধ্যা ৭ টা", "सुबह 10 बजे से शाम 7 बजे तक", "10 AM to 7 PM"."""
 
     return prompt.strip()

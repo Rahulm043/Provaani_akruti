@@ -113,16 +113,107 @@ from pipecat.turns.user_stop import (
     SpeechTimeoutUserTurnStopStrategy,
     TurnAnalyzerUserTurnStopStrategy,
 )
-from pipecat.frames.frames import TranscriptionFrame
+from pipecat.frames.frames import (
+    Frame,
+    InterimTranscriptionFrame,
+    TranscriptionFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
+)
+from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
+from pipecat.pipeline.pipeline import Pipeline
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.enums import EndTaskReason, RealtimeFeedbackType
 from pipecat.utils.run_context import set_current_org_id, set_current_run_id
+from pipecat.utils.time import time_now_iso8601
 
 # Setup tracing if enabled
 ensure_tracing()
 
 DEFAULT_USER_TURN_STOP_TIMEOUT = 1.5
 EXTERNAL_TURN_USER_STOP_TIMEOUT = 30.0
+
+
+class InterimToFinalFlusher(FrameProcessor):
+    """Flushes unfinalized interim speech from STT into finalized TranscriptionFrames on VAD silence."""
+
+    def __init__(self, stt_service=None, timeout: float = 0.3):
+        super().__init__()
+        self._stt_service = stt_service
+        self._timeout = timeout
+        self._latest_interim: str = ""
+        self._latest_lang: str | None = None
+        self._user_id: str = "user"
+        self._finalized_received: bool = False
+        self._flush_task: asyncio.Task | None = None
+
+    async def process_frame(self, frame: Frame, direction: FrameDirection):
+        await super().process_frame(frame, direction)
+
+        if isinstance(frame, InterimTranscriptionFrame):
+            text = (frame.text or "").strip()
+            if text:
+                self._latest_interim = text
+                self._latest_lang = getattr(frame, "language", None)
+                self._user_id = getattr(frame, "user_id", "user")
+                self._finalized_received = False
+        elif isinstance(frame, TranscriptionFrame):
+            self._finalized_received = True
+            self._latest_interim = ""
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+                self._flush_task = None
+        elif isinstance(frame, VADUserStartedSpeakingFrame):
+            self._latest_interim = ""
+            self._finalized_received = False
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+                self._flush_task = None
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            await self.handle_vad_speech_stopped(frame)
+
+        await self.push_frame(frame, direction)
+
+    async def handle_vad_speech_stopped(self, *args, **kwargs):
+        """Notify STT service to finalize and start promotion timer if STT takes too long."""
+        if self._stt_service:
+            try:
+                ws = getattr(self._stt_service, "_websocket", None)
+                if ws and hasattr(ws, "send") and getattr(ws, "state", None) is not None:
+                    from websockets.protocol import State
+                    if ws.state is State.OPEN:
+                        await ws.send(json.dumps({"type": "finalize"}))
+            except Exception as e:
+                logger.debug(f"[InterimFlusher] error sending finalize to STT: {e}")
+
+        if self._latest_interim and not self._finalized_received:
+            if self._flush_task and not self._flush_task.done():
+                self._flush_task.cancel()
+            self._flush_task = asyncio.create_task(
+                self._delayed_flush(self._latest_interim, self._latest_lang, self._user_id)
+            )
+
+    async def _delayed_flush(self, text: str, lang: str | None, user_id: str):
+        try:
+            await asyncio.sleep(self._timeout)
+            if not self._finalized_received and self._latest_interim == text and text:
+                logger.info(
+                    f"[InterimFlusher] Auto-promoting unfinalized interim speech '{text}' to finalized TranscriptionFrame"
+                )
+                final_frame = TranscriptionFrame(
+                    text=text,
+                    user_id=user_id,
+                    timestamp=time_now_iso8601(),
+                    language=lang,
+                    result={"transcript": text, "is_final": True, "promoted_from_interim": True},
+                )
+                self._finalized_received = True
+                self._latest_interim = ""
+                await self.push_frame(final_frame, FrameDirection.DOWNSTREAM)
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"[InterimFlusher] delayed flush error: {e}")
 
 
 async def _dtmf_listener_loop(workflow_run_id: int, task, stop_event: asyncio.Event):
@@ -570,17 +661,22 @@ async def _run_pipeline_smallwebrtc_impl(
     )
 
 
-def _trigger_analysis(workflow_run_id: int) -> None:
-    """Fire-and-forget post-call analysis via the analysis service."""
+def _trigger_analysis(workflow_run_id: int, transcript_text: str = "", metadata: dict = None) -> None:
+    """Fire-and-forget post-call analysis via the analysis service with full transcript payload."""
 
     async def _call():
         try:
-            async with httpx.AsyncClient(timeout=httpx.Timeout(5.0)) as client:
+            payload = {
+                "transcript": transcript_text or "",
+                "metadata": metadata or {}
+            }
+            async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
                 await client.post(
-                    f"http://analysis-service:8001/analyze/{workflow_run_id}"
+                    f"http://analysis-service:8001/analyze/{workflow_run_id}",
+                    json=payload
                 )
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Failed to post analysis trigger for run {workflow_run_id}: {e}")
 
     try:
         loop = asyncio.get_running_loop()
@@ -668,6 +764,24 @@ async def _run_pipeline_impl(
     # If the workflow run is already completed, we don't need to run it again
     if workflow_run.is_completed:
         raise HTTPException(status_code=400, detail="Workflow run already completed")
+
+    try:
+        from sqlalchemy import text
+        from api.services.prompt_compiler import set_cached_clinic_settings
+        org_id_for_cfg = organization_id or getattr(workflow_run, "organization_id", 1) or 1
+        async with db_client.async_session() as session:
+            res_cfg = await session.execute(
+                text("SELECT value FROM organization_configurations WHERE organization_id = :org_id AND LOWER(key) = 'clinic_settings';"),
+                {"org_id": org_id_for_cfg}
+            )
+            row_cfg = res_cfg.first()
+            if row_cfg and row_cfg[0]:
+                val = row_cfg[0]
+                if isinstance(val, str):
+                    val = json.loads(val)
+                set_cached_clinic_settings(val)
+    except Exception as e:
+        logger.warning(f"Could not load clinic_settings for pipeline run: {e}")
 
     merged_call_context_vars = dict(workflow_run.initial_context or {})
     # If there is some extra call_context_vars, fold them in. Persistence
@@ -962,7 +1076,7 @@ async def _run_pipeline_impl(
     user_vad_analyzer = SileroVADAnalyzer(
         params=VADParams(
             confidence=0.5,
-            start_secs=0.15,
+            start_secs=0.10,
             stop_secs=0.2,
             min_volume=0.05,
         )
@@ -1133,19 +1247,43 @@ async def _run_pipeline_impl(
             voicemail_detector=voicemail_detector,
         )
     else:
-        pipeline = build_pipeline(
-            transport,
-            stt,
-            audio_buffer,
-            llm,
-            tts,
-            user_context_aggregator,
-            assistant_context_aggregator,
-            pipeline_engine_callback_processor,
-            pipeline_metrics_aggregator,
-            voicemail_detector=voicemail_detector,
-            recording_router=recording_router,
+        interim_flusher = InterimToFinalFlusher(
+            stt_service=stt,
+            timeout=user_turn_stop_timeout,
         )
+        vad_controller = getattr(user_context_aggregator, "_vad_controller", None)
+        if vad_controller:
+            @vad_controller.event_handler("on_speech_stopped")
+            async def _on_vad_speech_stopped(controller, *args, **kwargs):
+                await interim_flusher.handle_vad_speech_stopped()
+
+        processors = [
+            transport.input(),
+            stt,
+            interim_flusher,
+        ]
+        if voicemail_detector:
+            logger.info("Adding native voicemail detector to pipeline")
+            processors.append(voicemail_detector.detector())
+
+        post_llm = [pipeline_engine_callback_processor]
+        if recording_router:
+            post_llm.append(recording_router)
+
+        processors.append(user_context_aggregator)
+        if voicemail_detector:
+            processors.append(voicemail_detector.llm_gate())
+
+        processors.extend([
+            llm,
+            *post_llm,
+            tts,
+            transport.output(),
+            audio_buffer,
+            assistant_context_aggregator,
+            pipeline_metrics_aggregator,
+        ])
+        pipeline = Pipeline(processors)
 
     # Create pipeline task with audio configuration
     task = create_pipeline_task(pipeline, workflow_run_id, audio_config)
@@ -1261,7 +1399,15 @@ async def _run_pipeline_impl(
         # Run the pipeline
         await run_pipeline_worker(task)
         logger.info(f"Task completed for run {workflow_run_id}")
-        _trigger_analysis(workflow_run_id)
+        await transcript_log_coordinator.flush()
+        formatted_transcript = getattr(transcript_log_coordinator, "get_formatted_transcript", lambda: "")()
+        init_ctx = getattr(workflow_run, "initial_context", {}) or {}
+        meta = {
+            "workflow_id": workflow_id,
+            "caller_number": init_ctx.get("caller_number") or getattr(workflow_run, "caller_number", None),
+            "called_number": init_ctx.get("called_number") or getattr(workflow_run, "called_number", None),
+        }
+        _trigger_analysis(workflow_run_id, transcript_text=formatted_transcript, metadata=meta)
     except asyncio.CancelledError:
         logger.warning("Received CancelledError in _run_pipeline")
     finally:

@@ -246,7 +246,7 @@ export default function Usage() {
             </button>
           </div>
           <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--text-dim)' }}>
-            Quota tracking and monthly usage dashboard · Cycle: <span style={{ color: 'var(--accent-indigo, #818cf8)', fontWeight: 600 }}>{currentSelectedPeriod.label}</span>
+            Monthly call usage & talk time overview · Cycle: <span style={{ color: 'var(--accent-indigo, #818cf8)', fontWeight: 600 }}>{currentSelectedPeriod.label}</span>
           </p>
         </div>
 
@@ -273,13 +273,13 @@ export default function Usage() {
       <div className="card mb-4 quota-featured-card">
         <h2 className="quota-card-title">
           <CreditCard size={18} style={{ color: 'var(--accent-indigo, #818cf8)' }} aria-hidden="true" />
-          <span>Active Quota Status</span>
+          <span>Plan Usage Status</span>
         </h2>
         
         {/* Bar 1: Base Usage */}
         <div style={{ marginBottom: '1.5rem' }}>
           <div className="flex-between mb-1" style={{ fontSize: '0.85rem' }}>
-            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Plan Included Minutes</span>
+            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Included Monthly Minutes</span>
             <span style={{ color: 'var(--text-secondary)' }} className="mono tabular-nums">
               {currentStats.baseMins} / {LIMIT_MINUTES} min
             </span>
@@ -297,7 +297,7 @@ export default function Usage() {
         {/* Bar 2: Extra Usage */}
         <div>
           <div className="flex-between mb-1" style={{ fontSize: '0.85rem' }}>
-            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Overage Usage</span>
+            <span style={{ fontWeight: 600, color: 'var(--text)' }}>Additional Minutes</span>
             <span style={{ color: 'var(--text-secondary)' }} className="mono tabular-nums">
               {currentStats.extraMins} mins
             </span>
@@ -313,7 +313,7 @@ export default function Usage() {
           {currentStats.extraMins > 0 && (
             <div className="overage-alert-pill">
               <Sparkles size={14} aria-hidden="true" />
-              <span>Estimated Overage Charges: Rs. {currentStats.overageCost.toFixed(2)} (at Rs. {OVERAGE_RATE}/min)</span>
+              <span>Additional Usage Charge: Rs. {currentStats.overageCost.toFixed(2)} (at Rs. {OVERAGE_RATE}/min)</span>
             </div>
           )}
         </div>
@@ -356,7 +356,7 @@ export default function Usage() {
       {/* Trajectory Bar Chart */}
       <div className="card mb-4 chart-card-container">
         <div className="chart-header-row">
-          <h3 className="section-title" style={{ margin: 0 }}>Usage Trajectory</h3>
+          <h3 className="section-title" style={{ margin: 0 }}>Daily Call Volume</h3>
 
           {/* Segmented Range Control: 7 Days | 1 Month | Lifetime */}
           <div className="range-picker mobile-scroll" role="tablist" aria-label="Chart date range filter">
@@ -434,7 +434,7 @@ export default function Usage() {
 
       {/* Accordion of Past Cycles */}
       <div className="card" style={{ padding: '1.5rem' }}>
-        <h3 className="section-title" style={{ marginBottom: '1.25rem' }}>Billing Cycles History</h3>
+        <h3 className="section-title" style={{ marginBottom: '1.25rem' }}>Billing History</h3>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
           {resolvedPeriods.map((period, idx) => {
             const isExpanded = expandedIndex === idx;
@@ -479,7 +479,7 @@ export default function Usage() {
                     <div style={{ fontWeight: 700, fontSize: '0.9rem', color: period.overageCost > 0 ? '#f59e0b' : 'inherit' }}>
                       {period.overageCost > 0 ? `Rs. ${period.overageCost.toFixed(2)}` : 'Rs. 0.00'}
                     </div>
-                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Overage Cost</div>
+                    <div style={{ fontSize: '0.72rem', color: 'var(--text-dim)' }}>Additional Charges</div>
                   </div>
                 </div>
 
@@ -496,7 +496,7 @@ export default function Usage() {
                         <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem', color: 'var(--text)' }}>{period.totalMinutes} min</div>
                       </div>
                       <div>
-                        <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Overage Minutes</div>
+                        <div style={{ color: 'var(--text-dim)', fontSize: '0.75rem' }}>Additional Minutes</div>
                         <div style={{ fontSize: '1rem', fontWeight: 700, marginTop: '0.15rem', color: period.extraMins > 0 ? '#f59e0b' : 'inherit' }}>
                           {period.extraMins} min
                         </div>
@@ -506,7 +506,7 @@ export default function Usage() {
                     {/* Quota Progress Bars */}
                     <div style={{ marginBottom: '1rem' }}>
                       <div className="flex-between mb-1" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                        <span>Plan Included Minutes</span>
+                        <span>Included Monthly Minutes</span>
                         <span className="mono tabular-nums">{period.baseMins} / {LIMIT_MINUTES} min</span>
                       </div>
                       <div className="quota-track-bg" style={{ height: '6px' }}>
@@ -516,7 +516,7 @@ export default function Usage() {
 
                     <div style={{ marginBottom: '0.25rem' }}>
                       <div className="flex-between mb-1" style={{ fontSize: '0.75rem', color: 'var(--text-dim)' }}>
-                        <span>Overage Minutes</span>
+                        <span>Additional Minutes</span>
                         <span className="mono tabular-nums">{period.extraMins} mins</span>
                       </div>
                       <div className="quota-track-bg" style={{ height: '6px' }}>

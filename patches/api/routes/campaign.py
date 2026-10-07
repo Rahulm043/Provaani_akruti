@@ -518,6 +518,8 @@ from api.services.prompt_compiler import (
     DEFAULT_CLINIC_SETTINGS,
     compile_unified_prompt,
     format_schedule_for_template,
+    get_cached_clinic_settings,
+    set_cached_clinic_settings,
 )
 
 CLINIC_SETTINGS_KEY = "clinic_settings"
@@ -643,6 +645,7 @@ async def get_clinic_settings(
                 val = row[0]
                 if isinstance(val, str):
                     val = json.loads(val)
+                set_cached_clinic_settings(val)
                 return {"success": True, "settings": val}
     except Exception:
         pass
@@ -660,6 +663,7 @@ async def update_clinic_settings(
     """
     org_id = user.selected_organization_id
     settings_dict = payload.model_dump()
+    set_cached_clinic_settings(settings_dict)
     is_timings_enabled = bool(settings_dict.get("appointment_config", {}).get("enabled", False))
     is_booking_enabled = is_timings_enabled and bool(settings_dict.get("appointment_config", {}).get("allow_booking", True))
 
@@ -717,7 +721,7 @@ async def update_clinic_settings(
                 SELECT wd.id, wd.workflow_id, wd.workflow_json 
                 FROM workflow_definitions wd
                 JOIN workflows w ON wd.workflow_id = w.id
-                WHERE (w.organization_id = :org_id OR :org_id IS NULL OR w.id IN (1, 4))
+                WHERE (w.organization_id = :org_id OR :org_id IS NULL OR w.id IN (1, 2, 3, 4))
                   AND wd.status = 'published';
             """),
             {"org_id": org_id},

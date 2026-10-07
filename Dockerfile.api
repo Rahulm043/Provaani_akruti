@@ -5,8 +5,8 @@ COPY patches/api/services/telephony/ari_manager.py /app/api/services/telephony/a
 COPY patches/api/services/pipecat/run_pipeline.py /app/api/services/pipecat/run_pipeline.py
 COPY patches/api/services/pipecat/service_factory.py /app/api/services/pipecat/service_factory.py
 COPY patches/api/services/configuration/registry.py /app/api/services/configuration/registry.py
-COPY patches/api/services/configuration/check_validity.py /app/api/services/configuration/check_validity.py
 COPY patches/api/services/prompt_compiler.py /app/api/services/prompt_compiler.py
+COPY patches/api/services/workflow/pipecat_engine_context_composer.py /app/api/services/workflow/pipecat_engine_context_composer.py
 USER root
 COPY cleanup_retention.py /app/cleanup_retention.py
 COPY warmup_daemon.py /app/warmup_daemon.py
